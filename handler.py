@@ -1,5 +1,5 @@
 # file: handler.py (Python 3.12)
-import os, json, time, ipaddress, hashlib
+import os, json, time, ipaddress, hashlib, random
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Tuple
 import boto3
@@ -13,11 +13,15 @@ WINDOW_DAYS       = int(os.getenv("WINDOW_DAYS", "30"))
 ALLOW_CIDRS_RAW   = os.getenv("ALLOW_CIDRS", "").strip()
 SCOPE             = os.getenv("SCOPE", "principal").lower()  # principal | account | global
 
+# Incident 테이블 이름 (환경변수 없으면 기본 'Incident')
+INCIDENT_TABLE    = os.environ.get("INCIDENT_TABLE", "Incident")
+
 # ===== clients =====
 dynamodb    = boto3.resource("dynamodb")
 conn_table  = dynamodb.Table(CONNECTIONS_TABLE)
 known_table = dynamodb.Table(KNOWN_TABLE)
 apigw       = boto3.client("apigatewaymanagementapi", endpoint_url=WS_ENDPOINT)
+incident_table = dynamodb.Table(INCIDENT_TABLE)
 
 # ===== allowlist nets =====
 _ALLOW_NETS: list[ipaddress._BaseNetwork] = []
@@ -76,6 +80,35 @@ def _epoch_ms(dt_iso: str | None) -> int:
     except Exception:
         return int(time.time() * 1000)
 
+def _normalize_ua(ua: str) -> str:
+    """OS/브라우저 계열만 추출 (핸들러/Incident 공통 사용)"""
+    u = (ua or "").lower()
+    if "windows" in u:
+        osfam = "windows"
+    elif "mac os x" in u or "macintosh" in u:
+        osfam = "macos"
+    elif "iphone" in u or "ipad" in u or "ios" in u:
+        osfam = "ios"
+    elif "android" in u:
+        osfam = "android"
+    elif "linux" in u:
+        osfam = "linux"
+    else:
+        osfam = "other-os"
+
+    if "edg/" in u or " edge/" in u:
+        br = "edge"
+    elif "chrome/" in u and "safari/" in u:
+        br = "chrome"
+    elif "safari/" in u and "chrome/" not in u:
+        br = "safari"
+    elif "firefox/" in u:
+        br = "firefox"
+    else:
+        br = "other-browser"
+
+    return f"{osfam}|{br}"
+
 # ===== stable principal & scope =====
 def _stable_principal(detail: Dict[str, Any]) -> str:
     ui  = (detail.get("userIdentity") or {})
@@ -100,6 +133,10 @@ def _scope_pk(account: str, detail: Dict[str, Any]) -> str:
 
 # ===== presentation helpers =====
 def _get_principal_display_and_arn(detail: Dict[str, Any]) -> Tuple[str, str]:
+    """
+    resource = f"{typ.lower()}/{user or prn or 'unknown'}"
+    (lambda_function.py 와 동일 스타일)
+    """
     ui = detail.get("userIdentity", {}) or {}
     typ = ui.get("type") or ""
     user= ui.get("userName") or ""
@@ -174,7 +211,8 @@ def _build_payload(detail: Dict[str, Any], unusual: bool) -> Dict[str, Any]:
         "severity": severity,
         "msgId": _make_msg_id(detail),
         "emittedAt": int(time.time() * 1000),
-        "meta": {"ip": src_ip},   # 새로운 IP 주소 포함
+        # 기본 meta: ip만 포함 (대시보드용)
+        "meta": {"ip": src_ip},
     }
     return payload
 
@@ -247,6 +285,63 @@ def _mark_and_is_new_ip(account: str, detail: Dict[str, Any], ip: str) -> Tuple[
             print(f"DDB-ERROR pk={pk} ip={ip} err={e}")
             return False, "ddb-error"
 
+# ===== Incident 저장 관련 유틸 =====
+def _generate_incident_id(prefix: str = "inc") -> str:
+    """
+    예: inc-YYYYMMDD-HHMMSS-XYZ (UTC 기준, 랜덤 3자리)
+    """
+    ts = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    rand = random.randint(0, 999)
+    return f"{prefix}-{ts}-{rand:03d}"
+
+def _save_incident_for_new_ip(detail: Dict[str, Any], payload: Dict[str, Any]) -> str | None:
+    """
+    새로운 IP 로그인 이벤트(payload)를 Incident 테이블에 저장.
+    lambda_function.py처럼 incident_details 없이 meta에 디바이스/IP 저장.
+    """
+    try:
+        event_type = (payload.get("type") or "").strip()
+        if not event_type:
+            return None
+
+        # CloudTrail 원본에서 UA 가져와서 디바이스 정보 생성
+        ua = detail.get("userAgent", "") or ""
+        device_summary = _normalize_ua(ua) if ua else ""
+
+        # payload.meta(ip 포함)를 기반으로 Incident용 meta를 구성
+        base_meta = payload.get("meta") or {}
+        meta: Dict[str, Any] = dict(base_meta)  # 원본 payload는 건드리지 않도록 복사
+
+        if ua or device_summary:
+            meta["device"] = {
+                "summary": device_summary,  # 예: "windows|chrome"
+                "ua": ua,                   # 원본 UA
+            }
+
+        now_iso = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        incident_id = _generate_incident_id()
+
+        item: Dict[str, Any] = {
+            "incident_id": incident_id,
+            "event_type": event_type,
+            "resource": payload.get("resource") or "",
+            "severity": payload.get("severity") or "LOW",
+            "status": "NEW",
+            # lambda_function.py와 동일하게 meta에만 저장
+            "meta": meta,
+            "source": payload.get("source") or "",
+            "account": payload.get("account") or "",
+            "region": payload.get("region") or "",
+            "created_at": now_iso,
+            "updated_at": now_iso,
+        }
+
+        incident_table.put_item(Item=item)
+        return incident_id
+    except Exception as e:
+        print(f"save_incident_for_new_ip error: {e}")
+        return None
+
 # ===== websocket broadcast =====
 def _broadcast_to_ws(payload: Dict[str, Any]) -> None:
     scan_kwargs: Dict[str, Any] = {}
@@ -302,6 +397,12 @@ def handler(event, context):
         return {"ok": True, "new_ip": False, "reason": reason}
 
     payload = _build_payload(detail, unusual=True)
+
+    # Incident 테이블에 저장 (incident_details 없이 meta에 디바이스+IP 저장)
+    incident_id = _save_incident_for_new_ip(detail, payload)
+    if incident_id:
+        payload["incident_id"] = incident_id
+
     stamp = f"{int(time.time()*1000)}-{account}"
     print(f"WS-BROADCAST {stamp} 새로운 IP로 로그인 접근 -> start")
     _broadcast_to_ws(payload)
