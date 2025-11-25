@@ -55,7 +55,7 @@ KnownIp 테이블에 처음 등장한 IP일 경우
 | 이름                | 예시                                                                                                                       | 설명                      |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------ | ----------------------- |
 | CONNECTIONS_TABLE | WebSocketConnections_v2                                                                                                     | WebSocket 연결 목록 저장      |
-| WS_ENDPOINT       | [[https://egtwu3mkhb.execute-api.us-east-1.amazonaws.com/prod](https://egtwu3mkhb.execute-api.us-east-1.amazonaws.com/prod)] | WebSocket APIGW 주소      |
+| WS_ENDPOINT       | [https://egtwu3mkhb.execute-api.us-east-1.amazonaws.com/prod](https://egtwu3mkhb.execute-api.us-east-1.amazonaws.com/prod) | WebSocket APIGW 주소      |
 | KNOWN_TABLE       | KnownIps                                                                                                                 | 신규 IP 기록 테이블            |
 | WINDOW_DAYS       | 30                                                                                                                       | IP TTL 및 lastSeen 유지 기간 |
 | ALLOW_CIDRS       | 10.0.0.0/8, 192.168.0.0/16                                                                                               | 허용된 IP 대역               |
