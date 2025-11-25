@@ -59,7 +59,6 @@
 ## 5. 사용 리소스 및 의존성 (Resources & Dependencies)
 
 ### 1. AWS 리소스
-
 - DynamoDB
 - security-alerts-state 
   - WebSocketConnections 
@@ -68,8 +67,8 @@
   - CloudTrail 
   - STS / IAM 이벤트 
   - EventBridge 트리거
-### 2. Python 라이브러리
 
+### 2. Python 라이브러리
 - boto3 
 - botocore 
 - urllib (GeoIP)
