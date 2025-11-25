@@ -11,8 +11,8 @@ CloudTrail / EventBridge / Lambda / DynamoDB / WebSocket API / S3 / IAM 등 AWS 
 
 ## 2. 🧩 아키텍처 (Architecture)
 
-> (여기 AWS 아키텍처 다이어그램 넣기)
-> 없으면 ChatGPT한테 만들어달라고 하면 그려줌!
+<img width="1512" height="937" alt="image" src="https://github.com/user-attachments/assets/85537271-85d6-44fb-866b-f7f0a676f012" />
+
 
 **핵심 구성요소**
 
