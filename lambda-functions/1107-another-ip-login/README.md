@@ -14,7 +14,7 @@
 [예: Incident 기록 생성]
 [예: WebSocket 브로드캐스트]
 
-
+---
 ## 2. 동작 조건 & 트리거 (Conditions & Trigger)
 ### 이벤트 소스
 EventBridge(CloudTrail 기반)
@@ -32,6 +32,7 @@ EventBridge(CloudTrail 기반)
 KnownIp 테이블에 처음 등장한 IP일 경우
 → “새로운 IP”로 판정 후 WebSocket 및 Incident 처리 수행.
 
+---
 ## 3. 처리 로직 요약 (Logic Flow)
 
 ### 1. EventBridge → Lambda로 CloudTrail 이벤트 수신
@@ -49,6 +50,7 @@ KnownIp 테이블에 처음 등장한 IP일 경우
 ### 5. 기존 IP일 경우
    - lastSeen 업데이트 후 종료
 
+---
 ## 4. 환경 변수 (Environment Variables)
 | 이름                | 예시                                                                                                                       | 설명                      |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------ | ----------------------- |
@@ -60,6 +62,7 @@ KnownIp 테이블에 처음 등장한 IP일 경우
 | SCOPE             | principal / account / global                                                                                             | 신규 IP 판단 단위             |
 | INCIDENT_TABLE    | Incident                                                                                                                 | 인시던트 히스토리 저장            |
 
+---
 ## 5. 사용 리소스 / 의존성 (Dependencies)
 ### AWS 리소스
    - DynamoDB
@@ -72,6 +75,8 @@ KnownIp 테이블에 처음 등장한 IP일 경우
    - boto3
    - botocore
    - 표준 라이브러리: os, json, time, datetime, hashlib, random, ipaddress 등
+
+---
 ## 6. 필요한 IAM 권한 (Required IAM Permissions)
 아래는 최소 권한 예시이다. 실제 ARN은 계정/리전에 맞게 수정 필요.
 ```json
@@ -104,6 +109,8 @@ KnownIp 테이블에 처음 등장한 IP일 경우
   ]
 }
 ```
+
+---
 ## 7. Incident 구조 (Stored Item Example)
 Incident 테이블에 저장되는 schema:
 ```json
@@ -127,6 +134,8 @@ Incident 테이블에 저장되는 schema:
   "updated_at": "2025-01-01T12:03:05Z"
 }
 ```
+
+---
 ## 8. WebSocket Broadcast Payload Example
 대시보드에 전송되는 payload:
 ```json
@@ -141,6 +150,8 @@ Incident 테이블에 저장되는 schema:
   "incident_id": "inc-20250101-120305-123"
 }
 ```
+
+---
 ## 9. 한계 & TODO (Limitations / TODO)
    - sourceIPAddress가 Private IP·Proxy 기반일 경우 신규 탐지 정확도가 낮아질 수 있음
    - GeoIP 기반 판단은 기능적으로 포함되지 않음
