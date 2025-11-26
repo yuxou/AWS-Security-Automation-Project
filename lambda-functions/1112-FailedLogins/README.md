@@ -32,11 +32,11 @@ EventBridge(CloudTrail 기반)
 ### 3. 카운터 증가: COUNTER_TABLE에 count 증가 및 TTL(집계 윈도우) 갱신 → inc_failure_and_get_count()
 ### 4. 기존 잠금 여부 확인: is_locked()가 참이면 플레이북 스킵
 ### 5. count ≥ 3 → run_playbook_lock_signin_10m() 실행
-    - Inline Policy 부착(iam:PutUserPolicy)
-    - 설정에 따라 LoginProfile 삭제(LOCK_CONSOLE_BY_LOGINPROFILE=true)
-    - 잠금 레코드 저장(put_lock) 및 해제 스케줄 생성(schedule_unlock_once)
-    - 상태 브로드캐스트: TRIGGERED → RUNNING → SUCCEEDED/FAILED
-    - Incident 생성/갱신(update_incident_for_action)
+- Inline Policy 부착(iam:PutUserPolicy)
+- 설정에 따라 LoginProfile 삭제(LOCK_CONSOLE_BY_LOGINPROFILE=true)
+- 잠금 레코드 저장(put_lock) 및 해제 스케줄 생성(schedule_unlock_once)
+- 상태 브로드캐스트: TRIGGERED → RUNNING → SUCCEEDED/FAILED
+- Incident 생성/갱신(update_incident_for_action)
 ### 6. 해제 호출(mode=unlock) → Inline Policy 제거, Incident 갱신, 상태 브로드캐스트 수행
 
 ---
