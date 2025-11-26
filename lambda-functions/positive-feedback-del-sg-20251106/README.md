@@ -1,7 +1,6 @@
 ## 1. 함수 개요 (Overview)
 
-이 Lambda 함수는 보안그룹 관련 “위험 해소(Positive Feedback)” 이벤트를 감지해서  
-대시보드와 Incident 히스토리에 기록하는 역할을 한다.
+이 Lambda 함수는 보안그룹 관련 “위험 해소(Positive Feedback)” 이벤트를 감지해서 대시보드와 Incident 히스토리에 기록하는 역할을 한다.
 - CloudTrail 이벤트에서  
   - `RevokeSecurityGroupIngress` 로 SSH 22번 포트(0.0.0.0/0) 규칙이 제거된 경우  
   - `DeleteSecurityGroup` 으로 위험했던 SG 자체가 삭제된 경우  
