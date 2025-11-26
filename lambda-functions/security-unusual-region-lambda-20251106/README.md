@@ -57,27 +57,27 @@
 ---
 ## 3. 처리 로직 (Logic) 
 
-### 1. EventBridge → Lambda로 CloudTrail 관리 이벤트가 들어옴.
+### 3.1. EventBridge → Lambda로 CloudTrail 관리 이벤트가 들어옴.
 
-### 2. Lambda가 eventSource/eventName을 중요 목록으로 1차 필터링.
+### 3.2. Lambda가 eventSource/eventName을 중요 목록으로 1차 필터링.
 
-### 3. 주체(principal) & 리전(region) 추출
+### 3.3. 주체(principal) & 리전(region) 추출
 - principal = event.detail.userIdentity.arn || principalId
 - region = event.region || event.detail.awsRegion
 
-### 4. 베이스라인 조회/갱신
+### 3.4. 베이스라인 조회/갱신
 - DDB security-alerts-state-v2에서 키 baseline_regions::{principal} 조회 
 - USUAL_REGIONS(환경변수 시드)과 합쳐 허용 리전 집합 구성 
 - LEARNING_MODE=true이고 미지의 리전이면:
   - 베이스라인에 추가 후 LOW 알림(type="LearnBaselineRegion") 전송 + Incident 기록
 
-### 5. 운영 모드 경보
+### 3.5. 운영 모드 경보
 - LEARNING_MODE=false이면서 허용 집합에 없는 리전 → HIGH/MEDIUM/…(환경변수) 알림 전송 
 - 알림 페이로드엔 사람이 읽기 쉬운 source 정규화(normalize_source) 적용 
 - sg/arn 필드에는 실행 주체의 IAM ARN을 넣어 맥락 강화 
 - 동일 내용을 Incident 테이블에도 기록(incident_id 생성)
 
-### 6. 전송
+### 3.6. 전송
 - DDB WebSocketConnections_v2를 스캔하며 API Gateway Management API(post_to_connection)로 대시보드 브로드캐스트 
 - Gone 커넥션은 테이블에서 정리
 
@@ -99,58 +99,49 @@
 ---
 ## 5. 사용 리소스 및 의존성 (Resources & Dependencies) 
 
-### 1. Amazon CloudTrail: 관리 이벤트 기록
+### 5.1. Amazon CloudTrail: 관리 이벤트 기록
 
-### 2. Amazon EventBridge Rule: CloudTrail 관리 이벤트 → Lambda 트리거
+### 5.2. Amazon EventBridge Rule: CloudTrail 관리 이벤트 → Lambda 트리거
 
-### 3. AWS Lambda: 본 감지/전송 함수(Python 3.11, 외부 라이브러리 없음 / boto3 내장)
+### 5.3. AWS Lambda: 본 감지/전송 함수(Python 3.11, 외부 라이브러리 없음 / boto3 내장)
 
-### 4. Amazon DynamoDB
+### 5.4. Amazon DynamoDB
 - security-alerts-state-v2 : 사용자별 허용 리전 베이스라인 저장(id, regions, updatedAt, expiresAt)
 - WebSocketConnections_v2 : { connectionId } 스캔 후 WebSocket 브로드캐스트 
 - Incident : 알림 히스토리(incident_id, event_type, resource, severity, status, created_at, updated_at)
 
-### 5. Amazon API Gateway (WebSocket): 대시보드로 알림 전송(Management API)
+### 5.5. Amazon API Gateway (WebSocket): 대시보드로 알림 전송(Management API)
 
-### 6. CloudWatch Logs: 함수 로그
+### 5.6. CloudWatch Logs: 함수 로그
 
 ---
 ## 6. IAM 권한 (IAM Permissions)
-요청한 **IAM 권한 섹션을 README 양식에 맞춰 깔끔하게 재작성**해서 아래와 같이 정리해줬어!
 
-바로 README에 붙여넣어도 완성도 있게 보일 거야 👇
-
----
-
-## 6. IAM 권한 (IAM Permissions)
-
-### 1. CloudWatch Logs 권한
+### 6.1. CloudWatch Logs 권한
 - logs:CreateLogGroup
 - logs:CreateLogStream
 - logs:PutLogEvents
 - 목적: 디버깅, 오류 분석, 함수 실행 추적
 
-### 2. DynamoDB 권한
+### 6.2. DynamoDB 권한
+- `security-alerts-state-v2`
+  - dynamodb:GetItem, PutItem, UpdateItem, DeleteItem, Scan
+  - “평소 사용 리전(Baseline Region)” 저장, 사용자별 baseline 조회/추가, TTL 기반 상태 관리
 
-#### 2.1 `security-alerts-state-v2`
+- `WebSocketConnections_v2`
+  - dynamodb:GetItem, PutItem, UpdateItem, DeleteItem, Scan**
+  - 현재 접속 중인 WebSocket 클라이언트 connectionId 목록 관리, 끊긴 연결 정리(GoneException 처리)
 
-- dynamodb:GetItem, PutItem, UpdateItem, DeleteItem, Scan
-- “평소 사용 리전(Baseline Region)” 저장, 사용자별 baseline 조회/추가, TTL 기반 상태 관리
+- `Incident`
+  - dynamodb:PutItem, GetItem, UpdateItem, Query, Scan**
+  - 중요 이벤트 발생 시 Incident 히스토리 생성/조회, NEW → MITIGATED → CLOSED 같은 상태 확장 가능
 
-#### 2.2 `WebSocketConnections_v2`
-- dynamodb:GetItem, PutItem, UpdateItem, DeleteItem, Scan**
-- 현재 접속 중인 WebSocket 클라이언트 connectionId 목록 관리, 끊긴 연결 정리(GoneException 처리)
-
-#### 2.3 `Incident`
-- dynamodb:PutItem, GetItem, UpdateItem, Query, Scan**
-- 중요 이벤트 발생 시 Incident 히스토리 생성/조회, NEW → MITIGATED → CLOSED 같은 상태 확장 가능
-
-### 3. API Gateway WebSocket 연결 관리 권한
+### 6.3. API Gateway WebSocket 연결 관리 권한
 - execute-api:ManageConnections 
 - Resource : arn:aws:execute-api:us-east-1:*:egtwu3mkhb/prod/POST/@connections/*
 - WebSocket 대시보드에 실시간 이벤트 push, 연결이 죽은 클라이언트 자동 삭제
 
-### 4. STS 권한
+### 6.4. STS 권한
 - sts:GetCallerIdentity
 - CloudTrail event 안에 account 정보가 없을 경우 fallback 계정 ID로 사용
 
