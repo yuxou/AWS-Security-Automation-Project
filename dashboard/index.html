@@ -493,18 +493,62 @@
 
       filtered = getSortedData(filtered, state.sort.incidents);
 
-      document.getElementById('incidentBody').innerHTML = filtered.slice(0, 50).map(i => `
+      document.getElementById('incidentBody').innerHTML = filtered.slice(0, 50).map(i => {
+        const statusColorClass = i.status === 'NEW' ? 'text-blue-400' : 
+                                 i.status === 'MITIGATED' ? 'text-green-400' : 
+                                 i.status === 'CLOSED' ? 'text-gray-500' : 'text-yellow-400';
+        
+        return `
         <tr onclick="showDetail(state.incidents.find(x=>x.incident_id=='${i.incident_id}'), 'incident')">
           <td class="px-5 py-2.5 font-mono text-blue-400 text-xs">${i.incident_id}</td>
           <td class="px-5 py-2.5 text-gray-200 font-medium">${i.event_type}</td>
           <td class="px-5 py-2.5 text-gray-400 truncate max-w-[200px]">${i.resource}</td>
           <td class="px-5 py-2.5"><span class="px-2 py-0.5 rounded text-[11px] font-bold ${getBadgeClass(i.severity)}">${i.severity}</span></td>
-          <td class="px-5 py-2.5"><span class="text-xs font-bold ${i.status==='NEW'?'text-blue-400':i.status==='MITIGATED'?'text-green-400':'text-gray-500'}">${i.status}</span></td>
+          
+          <td class="px-5 py-2.5" onclick="event.stopPropagation()">
+            <select onchange="updateIncidentStatus('${i.incident_id}', this.value)" 
+                    class="bg-transparent border border-gray-700 rounded px-1 py-1 text-xs font-bold outline-none focus:border-blue-500 cursor-pointer ${statusColorClass}">
+              <option value="NEW" class="bg-[#161b22] text-blue-400" ${i.status==='NEW'?'selected':''}>NEW</option>
+              <option value="PROCESSING" class="bg-[#161b22] text-yellow-400" ${i.status==='PROCESSING'?'selected':''}>PROCESSING</option>
+              <option value="MITIGATED" class="bg-[#161b22] text-green-400" ${i.status==='MITIGATED'?'selected':''}>MITIGATED</option>
+              <option value="CLOSED" class="bg-[#161b22] text-gray-500" ${i.status==='CLOSED'?'selected':''}>CLOSED</option>
+            </select>
+          </td>
+
           <td class="px-5 py-2.5 text-gray-500 text-xs truncate max-w-[150px]">${i.note || '-'}</td>
           <td class="px-5 py-2.5 text-gray-500 whitespace-nowrap font-mono text-xs">${formatTime(i.created_at)}</td>
           <td class="px-5 py-2.5 text-gray-500 whitespace-nowrap font-mono text-xs">${formatTime(i.updated_at)}</td>
         </tr>
-      `).join('');
+      `}).join('');
+    }
+
+    async function updateIncidentStatus(id, newStatus) {
+      // 1. 상태 객체 찾기 및 낙관적 업데이트 (화면 즉시 반영)
+      const inc = state.incidents.find(i => i.incident_id === id);
+      if(inc) {
+        inc.status = newStatus;
+        inc.updated_at = Date.now();
+      }
+      
+      renderTables();
+      
+      console.log(`Updating incident ${id} to ${newStatus}`);
+      try {
+        const res = await fetch(INCIDENT_UPDATE_ENDPOINT, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({ incident_id: id, status: newStatus })
+        });
+        
+        if(res.ok) {
+           // 성공 시 간단한 피드백 효과 (선택적)
+           // alert("상태가 변경되었습니다."); 
+        } else {
+           console.error("API 저장 실패");
+        }
+      } catch(e) { 
+        console.error("네트워크 에러", e); 
+      }
     }
 
     function addRemedSafe(r) {
@@ -618,16 +662,16 @@
         inc.note = newNote;
         inc.updated_at = Date.now();
       }
+      
       renderTables();
       closeModal();
 
       try {
-        const res = await fetch(INCIDENT_UPDATE_ENDPOINT, {
+        await fetch(INCIDENT_UPDATE_ENDPOINT, {
           method: "POST",
           headers: {"Content-Type": "application/json"},
           body: JSON.stringify({ incident_id: currentIncidentId, status: newStatus, note: newNote })
         });
-        if(!res.ok) console.error("저장 실패");
       } catch(e) { console.error("저장 에러", e); }
     }
 
