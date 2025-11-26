@@ -72,6 +72,7 @@
 - Python 3.x, boto3
 ---
 ## 6. IAM 권한 (IAM Permissions)
+
 ### 6.1. CloudWatch Logs
 - 로그 그룹/스트림 생성 및 로그 쓰기
 - CreateLogGroup, CreateLogStream, PutLogEvents
