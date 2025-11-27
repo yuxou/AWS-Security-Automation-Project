@@ -201,7 +201,11 @@
       <div class="card flex flex-col"> 
         <div class="px-5 py-3 border-b border-[#30363d] bg-[#161b22] flex justify-between items-center sticky top-0 z-20">
           <h2 class="font-bold text-gray-200 text-sm flex items-center gap-2">
-            <span class="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span> 실시간 보안 이벤트
+          <span class="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span> 
+          실시간 보안 이벤트
+          <span id="status-events" class="ml-2 px-2 py-0.5 rounded text-[10px] border border-gray-700 bg-gray-800 text-gray-500 font-normal transition-colors">
+            ● 미연결
+          </span>
           </h2>
           <span id="eventsCountBadge" class="bg-gray-800 text-gray-400 px-2 py-0.5 rounded text-xs font-mono">0</span>
         </div>
@@ -223,7 +227,11 @@
 
       <div class="card flex flex-col"> <div class="px-5 py-3 border-b border-[#30363d] bg-[#161b22] flex justify-between items-center sticky top-0 z-20">
           <h2 class="font-bold text-gray-200 text-sm flex items-center gap-2">
-            <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> 자동 대응 로그
+            <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> 
+            자동 대응 로그
+            <span id="status-remed" class="ml-2 px-2 py-0.5 rounded text-[10px] border border-gray-700 bg-gray-800 text-gray-500 font-normal transition-colors">
+              ● 미연결
+            </span>
           </h2>
           <span id="remedsCountBadge" class="bg-gray-800 text-gray-400 px-2 py-0.5 rounded text-xs font-mono">0</span>
         </div>
@@ -245,7 +253,12 @@
 
     <div class="card flex flex-col h-[500px]">
       <div class="px-5 py-3 border-b border-[#30363d] bg-[#161b22] flex flex-col md:flex-row md:justify-between md:items-center gap-3 sticky top-0 z-20">
-        <h2 class="font-bold text-gray-200 text-sm">인시던트 이력 관리 (History)</h2>
+          <h2 class="font-bold text-gray-200 text-sm flex items-center">
+            인시던트 이력 관리 (History)
+            <span id="status-history" class="ml-2 px-2 py-0.5 rounded text-[10px] border border-gray-700 bg-gray-800 text-gray-500 font-normal transition-colors">
+              ● 미연결
+            </span>
+          </h2>
         <div class="flex flex-wrap gap-2 w-full md:w-auto">
           <input id="historySearch" type="text" placeholder="ID, 유형, 리소스 검색..." class="bg-[#0d1117] border border-[#30363d] rounded px-3 py-1.5 text-xs text-gray-300 w-full md:w-64 focus:border-blue-500 outline-none placeholder-gray-600 transition-colors">
           <div class="flex gap-2 w-full md:w-auto">
@@ -532,33 +545,36 @@
                                  i.status === 'MITIGATED' ? 'text-green-400' : 
                                  i.status === 'CLOSED' ? 'text-gray-500' : 'text-yellow-400';
         
-        // 데이터에 notify_status가 없으면 'SENT'로 가정
         const notifyStatus = i.notify_status || 'SENT'; 
 
         return `
         <tr onclick="showDetail(state.incidents.find(x=>x.incident_id=='${i.incident_id}'), 'incident')" class="border-b border-[#30363d]/50 hover:bg-[#161b22] cursor-pointer">
-          <td class="px-4 py-3 font-mono text-blue-400 text-xs truncate" title="${i.incident_id}">${i.incident_id}</td>
-          <td class="px-4 py-3 text-gray-200 font-medium truncate" title="${i.event_type}">${i.event_type}</td>
-          <td class="px-4 py-3 text-gray-400 truncate" title="${i.resource}">${i.resource}</td>
+          <td class="px-4 py-3 font-mono text-blue-400 text-xs truncate text-center" title="${i.incident_id}">${i.incident_id}</td>
+          <td class="px-4 py-3 text-gray-200 font-medium truncate text-center" title="${i.event_type}">${i.event_type}</td>
+          <td class="px-4 py-3 text-gray-400 truncate text-center" title="${i.resource}">${i.resource}</td>
           <td class="px-4 py-3 text-center"><span class="inline-block px-2 py-0.5 rounded text-[11px] font-bold ${getBadgeClass(i.severity)}">${i.severity}</span></td>
 
           <td class="px-4 py-3 text-center" onclick="event.stopPropagation()">
             <select onchange="updateIncidentStatus('${i.incident_id}', this.value)" 
-                    class="w-28 bg-transparent border border-gray-700 rounded px-1 py-1 text-xs font-bold outline-none focus:border-blue-500 cursor-pointer ${statusColorClass}">
+                    class="w-full bg-transparent border border-gray-700 rounded px-1 py-1 text-xs font-bold outline-none focus:border-blue-500 cursor-pointer ${statusColorClass}">
               <option value="NEW" class="bg-[#161b22] text-blue-400" ${i.status==='NEW'?'selected':''}>NEW</option>
               <option value="PROCESSING" class="bg-[#161b22] text-yellow-400" ${i.status==='PROCESSING'?'selected':''}>PROCESSING</option>
               <option value="MITIGATED" class="bg-[#161b22] text-green-400" ${i.status==='MITIGATED'?'selected':''}>MITIGATED</option>
               <option value="CLOSED" class="bg-[#161b22] text-gray-500" ${i.status==='CLOSED'?'selected':''}>CLOSED</option>
             </select>
           </td>
+
           <td class="px-4 py-3 text-center">
             <span class="inline-block px-2 py-0.5 rounded text-[10px] text-center font-bold tracking-wider ${getNotifyBadgeClass(notifyStatus)}">
               ${notifyStatus.toUpperCase()}
             </span>
           </td>
-          <td class="px-4 py-3 text-gray-500 text-xs truncate" title="${i.note || ''}">${i.note || '-'}</td>
+
+          <td class="px-4 py-3 text-gray-500 text-xs truncate text-center" title="${i.note || ''}">${i.note || '-'}</td>
+          
           <td class="px-4 py-3 text-gray-500 whitespace-nowrap font-mono text-xs text-center">${formatTime(i.created_at)}</td>
-          <td class="px-5 py-2.5 text-gray-500 whitespace-nowrap font-mono text-xs text-center">${formatTime(i.updated_at)}</td>
+          
+          <td class="px-4 py-3 text-gray-500 whitespace-nowrap font-mono text-xs text-center">${formatTime(i.updated_at)}</td>
         </tr>
       `}).join('');
     }
@@ -772,6 +788,38 @@
       }
     }
 
+    function checkGlobalStatus() {
+      const e = state.ws.events && state.ws.events.readyState === 1;
+      const r = state.ws.remeds && state.ws.remeds.readyState === 1;
+      const h = state.ws.history && state.ws.history.readyState === 1;
+
+      const mainStatus = document.getElementById('connectionStatus');
+      
+      if (e && r && h) {
+        mainStatus.className = "px-3 py-1 rounded-full text-xs font-medium bg-green-900/30 border border-green-700 text-green-400 flex items-center gap-1.5 whitespace-nowrap transition-all shadow-[0_0_10px_rgba(74,222,128,0.3)]";
+        mainStatus.innerHTML = '<span class="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_5px_#22c55e]"></span> 시스템 정상 가동';
+      } else {
+        const count = [e, r, h].filter(Boolean).length;
+        mainStatus.className = "px-3 py-1 rounded-full text-xs font-medium bg-gray-800 text-gray-400 border border-gray-700 flex items-center gap-1.5 whitespace-nowrap";
+        mainStatus.innerHTML = `<span class="w-2 h-2 rounded-full bg-gray-500"></span> 부분 연결 (${count}/3)`;
+      }
+    }
+
+    function setSectionStatus(elementId, isConnected) {
+      const el = document.getElementById(elementId);
+      if (!el) return;
+
+      if (isConnected) {
+        el.innerHTML = '● 정상 연결됨';
+        el.className = 'ml-2 px-2 py-0.5 rounded text-[10px] border border-green-800/50 bg-green-900/30 text-green-400 font-normal transition-colors shadow-[0_0_5px_rgba(74,222,128,0.2)]';
+      } else {
+        el.innerHTML = '● 연결 끊김';
+        el.className = 'ml-2 px-2 py-0.5 rounded text-[10px] border border-gray-700 bg-gray-800 text-gray-500 font-normal transition-colors';
+      }
+      
+      checkGlobalStatus();
+    }
+
     function connect() {
       const urls = {
         event: document.getElementById('eventUrl').value,
@@ -780,42 +828,28 @@
       };
       localStorage.setItem('urls', JSON.stringify(urls));
 
+      // 기존 소켓 닫기
       Object.values(state.ws).forEach(ws => ws && ws.close());
 
-      const setStatus = (msg, color) => {
-        const el = document.getElementById('connectionStatus');
-        if (!el) return;
-        el.innerHTML = `<span class="w-2 h-2 rounded-full ${color}"></span> ${msg}`;
-        const variant =
-          color === 'bg-green-500'
-            ? 'bg-green-900/30 border-green-700 text-green-400'
-            : 'bg-gray-800 border-gray-700 text-gray-400';
-        el.className = `px-3 py-1 rounded-full text-xs font-medium border flex items-center gap-1.5 ${variant} whitespace-nowrap`;
-      };
+      // 헤더의 전체 상태 표시 (옵션)
+      const mainStatus = document.getElementById('connectionStatus');
+      if(mainStatus) mainStatus.innerHTML = '<span class="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span> 연결 시도 중...';
 
+      // --- 1. 이벤트 스트림 연결 ---
       if(urls.event) {
         const ws = new WebSocket(addAuthParams(urls.event));
         ws.onopen = () => {
-            setStatus('정상 연결됨', 'bg-green-500');
-            setInterval(() => {
-                if (ws.readyState === 1) {
-                    ws.send(JSON.stringify({ type: "ping", timestamp: Date.now() }));
-                }
-            }, 30000);
+          setSectionStatus('status-events', true); // <--- 개별 상태 ON
+          setInterval(() => { if (ws.readyState === 1) ws.send(JSON.stringify({ type: "ping", timestamp: Date.now() })); }, 30000);
         };
+        ws.onclose = () => setSectionStatus('status-events', false); // <--- 끊기면 OFF
+        ws.onerror = () => setSectionStatus('status-events', false);
+
         ws.onmessage = e => {
           try {
             const d = JSON.parse(e.data);
-
-            if (d.type === 'ping' || d.type === 'ack') {
-                //console.log(`Event WS: Ping 받음 -> Pong 보냄`);
-                ws.send(JSON.stringify({ type: "pong" }));
-                return; 
-            }
-            if (d.type === 'pong' || d.body === 'pong') {
-                //console.log(`Event WS: Pong 도착`);
-                return;
-            }
+            if (d.type === 'ping' || d.type === 'ack') { ws.send(JSON.stringify({ type: "pong" })); return; }
+            if (d.type === 'pong' || d.body === 'pong') return;
 
             let eventTime = d.time;
             if(typeof eventTime === 'string') eventTime = Date.parse(eventTime);
@@ -840,80 +874,59 @@
         state.ws.events = ws;
       }
 
+      // --- 2. 대응 로그 스트림 연결 ---
       if(urls.remed) {
         const ws = new WebSocket(addAuthParams(urls.remed));
         ws.onopen = () => {
-            setInterval(() => {
-                if (ws.readyState === 1) {
-                    ws.send(JSON.stringify({ type: "ping", timestamp: Date.now() }));
-                }
-            }, 30000);
+          setSectionStatus('status-remed', true); // <--- 개별 상태 ON
+          setInterval(() => { if (ws.readyState === 1) ws.send(JSON.stringify({ type: "ping", timestamp: Date.now() })); }, 30000);
         };
+        ws.onclose = () => setSectionStatus('status-remed', false);
+        ws.onerror = () => setSectionStatus('status-remed', false);
+
         ws.onmessage = e => {
           try {
             const d = JSON.parse(e.data);
-
-            if (d.type === 'ping' || d.type === 'ack') {
-                //console.log(`Remed WS: Ping 받음 -> Pong 보냄`);
-                ws.send(JSON.stringify({ type: "pong" }));
-                return; 
-            }
-            if (d.type === 'pong' || d.body === 'pong') {
-                //console.log(`Remed WS: Pong 도착`);
-                return;
-            }
-
+            if (d.type === 'ping') { ws.send(JSON.stringify({ type: "pong" })); return; }
+            if (d.type === 'pong' || d.body === 'pong') return;
             addRemedSafe(d);
           } catch {}
         };
         state.ws.remeds = ws;
       }
 
+      // --- 3. 히스토리 스트림 연결 ---
       if(urls.hist) {
         const ws = new WebSocket(addAuthParams(urls.hist));
         ws.onopen = () => {
+          setSectionStatus('status-history', true); // <--- 개별 상태 ON
           ws.send(JSON.stringify({ action: "subscribe", limit: 50 }));
-          setInterval(() => {
-            if (ws.readyState === 1) {
-                ws.send(JSON.stringify({ type: "ping", timestamp: Date.now() }));
-            }
-          }, 30000);
+          setInterval(() => { if (ws.readyState === 1) ws.send(JSON.stringify({ type: "ping", timestamp: Date.now() })); }, 30000);
         };
+        ws.onclose = () => setSectionStatus('status-history', false);
+        ws.onerror = () => setSectionStatus('status-history', false);
+
         ws.onmessage = e => {
+          // (기존 메시지 처리 로직 유지)
           try {
             let d;
             try {
                 d = JSON.parse(e.data);
                 if (typeof d === 'string' || d.body) {
                     const inner = d.body || d;
-                    if (typeof inner === 'string') {
-                        try { d = JSON.parse(inner); } catch {}
-                    }
+                    if (typeof inner === 'string') { try { d = JSON.parse(inner); } catch {} }
                 }
-            } catch (err) {
-                console.warn("JSON 파싱 실패:", e.data);
-                return;
-            }
+            } catch (err) { return; }
 
-            if (d.type === 'ping' || d.type === 'ack') {
-                //console.log(`History WS: Ping 받음 -> Pong 보냄`);
-                ws.send(JSON.stringify({ type: "pong" }));
-                return; 
-            }
-            if (d.type === 'pong' || d.body === 'pong') {
-                //console.log(`History WS: Pong 도착`);
-                return;
-            }
+            if (d.type === 'ping') { ws.send(JSON.stringify({ type: "pong" })); return; }
+            if (d.type === 'pong' || d.body === 'pong') return;
 
             if(d.incidents && Array.isArray(d.incidents)) {
               state.incidents = []; 
               d.incidents.forEach(i => updateIncidentState(i));
               updateCharts(); renderTables();
-            } 
-            
-            else {
+            } else {
                 if (d.kind === 'remediation' || d.action) {
-                    console.log("조치 로그 수신:", d);
                     addRemedSafe({
                         time: d.time || Date.now(),
                         action: d.action,
@@ -924,14 +937,9 @@
                 }
                 else if (d.kind === 'incident_update' || d.incident_id || d.incident) {
                     const incData = d.incident || d;
-                    console.log("인시던트 수신:", incData);
-                    if (incData.incident_id) {
-                        updateIncidentState(incData);
-                    }
+                    if (incData.incident_id) updateIncidentState(incData);
                 }
-                
-                updateCharts(); 
-                renderTables();
+                updateCharts(); renderTables();
             }
           } catch(err) { console.error(err); }
         };
