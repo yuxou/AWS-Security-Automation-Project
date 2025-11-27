@@ -271,7 +271,7 @@ def to_dashboard_event(event, payload) -> dict:
     account_id = extract_account_id(event, payload)
     raw_source = payload.get("source") or event.get("source") or "Unknown"
     source = normalize_source(raw_source)
-    etype  = payload.get("event_type") or payload.get("type") or "불가능한 위치(IP/Geo) 간 동시 로그인"
+    etype  = payload.get("event_type") or payload.get("type") or "불가능한 위치(IP/Geo) 동시 로그인"
     sev    = (payload.get("severity") or "LOW").upper()
 
     sg_id  = _pick(payload.get("sg_id"), payload.get("securityGroupId"), payload.get("security_group_id"))
@@ -513,18 +513,27 @@ def auto_block_user(user_arn: str) -> dict:
     user_name = user_arn.split("/")[-1] if "/" in user_arn else user_arn
     result = {"user": user_name, "loginBlocked": False, "keysDisabled": 0, "error": None}
     try:
+        # 1) 콘솔 로그인 비밀번호 초기화 요구
         try:
             iam.update_login_profile(UserName=user_name, PasswordResetRequired=True)
             result["loginBlocked"] = True
         except iam.exceptions.NoSuchEntityException:
+            # LoginProfile 이 없었던 유저면 여기서 그냥 패스
             pass
+
+        # 2) 액세스 키 비활성화 (있으면)
         try:
             keys = iam.list_access_keys(UserName=user_name).get("AccessKeyMetadata", [])
             for k in keys:
-                iam.update_access_key(UserName=user_name, AccessKeyId=k["AccessKeyId"], Status="Inactive")
+                iam.update_access_key(
+                    UserName=user_name,
+                    AccessKeyId=k["AccessKeyId"],
+                    Status="Inactive"
+                )
             result["keysDisabled"] = len(keys)
         except Exception as e:
             result["error"] = f"keys: {e}"
+
     except Exception as e:
         result["error"] = str(e)
     return result
@@ -608,7 +617,7 @@ def handle_auth_impossible_travel(event):
         "distance_km": round(dist_km, 1),
         "speed_kmh": round(speed, 1),
         "raw_event": detail,
-        "event_type": "불가능한 위치(IP/Geo) 간 동시 로그인",
+        "event_type": "불가능한 위치(IP/Geo) 동시 로그인",
     }
 
     # 🔹 Incident details JSON (요청 포맷)
@@ -617,20 +626,62 @@ def handle_auth_impossible_travel(event):
     source_for_incident = normalize_source(
         event.get("source") or (detail.get("eventSource") or "AWS Sign-In/STS")
     )
-    incident_type = "불가능한 위치(IP/Geo) 간 동시 로그인"
+    incident_type = "불가능한 위치(IP/Geo) 동시 로그인"
+
+    # ── meta용 디바이스 / UA / IP 정리 ─────────────────────────
+    user_agent = detail.get("userAgent") or ""
+    ua_lower = user_agent.lower()
+
+    # OS 대략 추정
+    if "windows" in ua_lower:
+        os_part = "windows"
+    elif "mac os x" in ua_lower:
+        os_part = "macos"
+    elif "linux" in ua_lower:
+        os_part = "linux"
+    else:
+        os_part = "unknown"
+
+    # 브라우저 대략 추정
+    if "firefox" in ua_lower:
+        browser_part = "firefox"
+    elif "chrome" in ua_lower:
+        browser_part = "chrome"
+    elif "safari" in ua_lower and "chrome" not in ua_lower:
+        browser_part = "safari"
+    else:
+        browser_part = "unknown"
+
+    device_summary = f"{os_part}|{browser_part}"
+
+    meta_for_incident = {
+        "ip": ip,
+        "device": {
+            "summary": device_summary,
+            "ua": user_agent,
+        },
+        "geo": {
+            "country": g.get("country"),
+            "city": g.get("city"),
+            "asn": g.get("asn"),
+        },
+    }
 
     incident_details = {
         "time": when_iso,
         "source": source_for_incident,
         "type": incident_type,
-        "sg": "",
+        "sg": "",  # SG 개념이 없으니까 빈 문자열
         "arn": user_arn,
         "resource": user_arn,
         "account": account_for_incident or "",
         "region": region_for_incident,
         "alertType": "ALERT",
-        "rulesViolated": [incident_type],
+        "rulesViolated": [
+            "IMPOSSIBLE_TRAVEL: 불가능한 위치(IP/Geo) 동시 로그인"
+        ],
         "severity": (payload.get("severity") or "HIGH").upper(),
+        "meta": meta_for_incident,
     }
 
     # 🔹 Incident 기록
@@ -639,10 +690,11 @@ def handle_auth_impossible_travel(event):
         resource=user_arn,
         severity=payload["severity"],
         status="NEW",
-        note="불가능 위치 간 동시 로그인 탐지",
+        note="",  # note는 사용하지 않으므로 빈 문자열
         details=incident_details,
         created_at=when_iso,
     )
+
     if incident:
         # 대시보드 payload에도 incident_id 포함
         payload["incident_id"] = incident["incident_id"]
@@ -653,16 +705,48 @@ def handle_auth_impossible_travel(event):
 
     # 2) 자동대응 (semi_auto / full_auto 설정 & 화이트리스트 조건 만족 시)
     if ACTION_MODE in ("semi_auto", "full_auto") and should_auto_block(g):
+        auto_action = ""
+        action_status = "TRIGGERED"  # 기본값
+        meta = {"auth_kind": auth_kind, "user_type": u_type}
+        action_result = None
+
         if u_type == "IAMUser":
             if ACTION_MODE == "full_auto":
-                action_res = auto_block_user(user_arn)
-                payload["auto_action"] = "AccountLocked"
-                payload["auto_result"] = action_res
+                # 실제 IAM 계정 잠금 시도
+                auto_action = "AccountLocked"
+                action_result = auto_block_user(user_arn)
+                meta["result"] = action_result
+
+                # 에러 없으면 성공, 있으면 실패로 표시
+                if not action_result.get("error"):
+                    action_status = "SUCCEEDED"
+                else:
+                    action_status = "FAILED"
             else:
-                payload["auto_action"] = "NeedsApproval"
+                # semi_auto : 자동으로는 안 막고 승인 필요 상태만 남김
+                auto_action = "PasswordResetRequired"
+                action_status = "PENDING"
         else:
-            # 루트/Role/STS 등은 실제 차단 대신 안내용
-            payload["auto_action"] = "Skipped(Non-IAMUser)"
+            # 루트/Role/STS 등은 실제 차단 대신 스킵
+            auto_action = "Skipped(Non-IAMUser)"
+            action_status = "SKIPPED"
+
+        # 대시보드 상세 보기용으로 payload에도 기록
+        payload["auto_action"] = auto_action
+        if action_result is not None:
+            payload["auto_result"] = action_result
+
+        # 🔹 자동 대응 로그 WebSocket으로 전송
+        #    - index.html 은 이 JSON을 그대로 받아서 "자동 대응 로그" 테이블 + KPI에 반영함
+        send_action_payload({
+            "time": when_iso,
+            "action": auto_action,
+            "target": user_arn,
+            "playbook": "account-lock-or-approve",
+            "status": action_status,  # 여기 값이 SUCCEEDED 면 초록 KPI + 인시던트 갱신
+            "incident_id": payload.get("incident_id"),  # 있으면 해당 인시던트 상태를 MITIGATED 로 올려줌
+            "meta": meta
+        })
 
         action_bundle = to_dashboard_event(event, payload)
         # send_action(action_bundle)  # 기존에 따로 구현되어 있다면 사용
