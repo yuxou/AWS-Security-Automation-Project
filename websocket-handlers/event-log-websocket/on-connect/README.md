@@ -75,7 +75,7 @@ expire_at = int(time.time()) + 86400
 ```css
 arn:aws:dynamodb:{region}:{account-id}:table/{CONNECTIONS_TABLE}
 ```
-### CloudWatch Logs 권한
+### 2. CloudWatch Logs 권한
 - AWSLambdaBasicExecutionRole
    - 로그 출력
 

@@ -64,7 +64,7 @@ table.delete_item(Key={'connectionId': conn_id})
 ```css
 arn:aws:dynamodb:{region}:{account-id}:table/{CONNECTIONS_TABLE}
 ```
-### CloudWatch Logs 권한
+### 2. CloudWatch Logs 권한
 - AWSLambdaBasicExecutionRole (기본 로그 기록)
 
 ---
