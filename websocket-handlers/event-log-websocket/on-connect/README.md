@@ -24,25 +24,39 @@ API Gateway WebSocket – `$connect` route
 ### 1. WebSocket Client → $connect → Lambda 호출
 - API Gateway가 새로운 WebSocket 연결을 수립하면 Lambda가 호출됩니다.
 ### 2. Connection 정보 추출
-- `connectionId`
-- `queryStringParameters.clientId`
-- `queryStringParameters.account`
-- `queryStringParameters.region`
-- `requestContext.identity.sourceIp`
-### 3. TTL(24시간) 생성
 ```python
-expire_at = int(time.time()) + 86400
+cid = event["requestContext"]["connectionId"]
 ```
-### 4. DynamoDB CONNECTIONS_TABLE에 저장
-저장 항목:
-- connectionId
-- createdAt (epoch ms)
-- ttl
-- clientId (옵션)
-- account (옵션)
-- region (옵션)
-- sourceIp (옵션)
-### 5. 응답
+### 3. queryStringParameters 파싱
+| 필드       | 설명             | 기본값     |
+| -------- | -------------- | ------- |
+| clientId | 대시보드/Agent 식별자 | unknown |
+| account  | AWS 계정 ID      | 빈 문자열   |
+| region   | AWS 리전         | 빈 문자열   |
+### 4. source IP 추출
+다음 우선순위로 클라이언트 IP를 얻습니다:
+1. `requestContext.identity.sourceIp`
+2. `X-Forwarded-For` 또는 `x-forwarded-for` 헤더
+3. 둘 다 없으면 빈 문자열
+### 5. TTL 계산
+```python
+ttl = now_sec + TTL_HOURS * 3600
+```
+### 6. DynamoDB 저장 항목 구성
+| 필드           | 설명                 |
+| ------------ | ------------------ |
+| connectionId | WebSocket 연결 ID    |
+| createdAt    | epoch milliseconds |
+| ttl          | 만료 시각(epoch sec)   |
+| clientId     | 기본값 unknown        |
+| account      | 선택적                |
+| region       | 선택적                |
+| sourceIp     | 클라이언트의 실제 IP       |
+### 7. DynamoDB PutItem 저장
+```python
+table.put_item(Item=item)
+```
+### 8. 응답
 - HTTP 200
 - `"connected"` 반환
 
@@ -60,7 +74,7 @@ expire_at = int(time.time()) + 86400
    - API Gateway WebSocket — $connect Route
 ### Python 패키지
    - boto3
-   - json
+   - botocore.exceptions
    - time
    - os
 
@@ -82,12 +96,11 @@ arn:aws:dynamodb:{region}:{account-id}:table/{CONNECTIONS_TABLE}
 ---
 ## 7. 한계 & TODO (Limitations / TODO)
 ### 한계
-- 기존 연결을 삭제(cleanup)하는 로직이 없음
-   - 오래된 연결이 계속 누적될 수 있음
-- TTL은 24시간으로 고정
-- clientId/account/region은 신뢰 기반 입력값이며 검증 기능 없음
+- 접속 IP를 기반으로 클라이언트 식별하므로 프록시나 NAT 환경에서는 정확도가 떨어질 수 있음
+- TTL 만료 외에 비정상 종료 정리 로직은 포함되어 있지 않음
+- clientId, account, region 값의 유효성 검증 기능이 없음
 ### TODO
-- 오래된 connectionId 자동 정리(Cleanup) 기능 추가
-- 연결 중복 방지 로직 추가
-- clientId 인증·검증 기능 확장
-- region/account 기반 연결 분류 기능 개선
+- userAgent, browser fingerprint 등 추가 클라이언트 정보 저장 확장
+- 비정상 종료 연결 식별 후 자동 정리 기능 추가
+- 여러 지역/계정 기반 대시보드 라우팅 고도화
+- TTL 기반 청소 작업의 CloudWatch 자동화 추가

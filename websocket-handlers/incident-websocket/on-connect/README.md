@@ -26,23 +26,30 @@ API Gateway WebSocket – `$connect` route
 ```python
 cid = event["requestContext"]["connectionId"]
 ```
-### 3. 현재 시각 및 TTL 계산
-- `createdAt`: epoch milliseconds
-- `ttl`: 현재 시간 + TTL_HOURS
+### 3. queryStringParameters 파싱
+| 필드       | 설명           | 기본값     |
+| -------- | ------------ | ------- |
+| clientId | 접속 클라이언트 식별자 | unknown |
+| account  | AWS 계정 ID    | (빈 문자열) |
+| region   | AWS 리전       | (빈 문자열) |
+### 4. TTL 생성
+TTL 기본값: 24시간
 ```python
-now_sec = int(time.time())
-ttl_val = now_sec + TTL_HOURS * 3600
+ttl = now_sec + TTL_HOURS * 3600
 ```
-### 4. DynamoDB CONNECTIONS_TABLE에 저장
+
+### 5. DynamoDB Item 생성
 저장 항목:
-| 필드           | 설명                  |
-| ------------ | ------------------- |
-| connectionId | WebSocket 연결 고유 ID  |
-| createdAt    | 연결 생성 시각(ms)        |
-| ttl          | 자동 만료 시각(epoch sec) |
-| clientId     | 기본값 "unknown"       |
-### 5. 저장 검증(get_item)
-저장된 항목을 다시 읽어 로그로 출력합니다.
+| 필드           | 설명                 |
+| ------------ | ------------------ |
+| connectionId | WebSocket 고유 ID    |
+| createdAt    | epoch milliseconds |
+| ttl          | 만료 시간              |
+| clientId     | 사용자 식별자            |
+| account      | 선택적                |
+| region       | 선택적                |
+### 5. DynamoDB에 PutItem 저장
+History WebSocket 클라이언트 목록에 추가합니다.
 ### 6. 응답
 - HTTP 200
 - `"connected"` 반환
@@ -59,10 +66,10 @@ ttl_val = now_sec + TTL_HOURS * 3600
 ### AWS 리소스
    - DynamoDB
       - CONNECTIONS_TABLE (PK: connectionId)
-   - API Gateway WebSocket — $connect Route
+   - API Gateway WebSocket — `$connect` Route
 ### Python 패키지
    - boto3
-   - json
+   - botocore.exceptions
    - time
    - os
 
@@ -72,7 +79,7 @@ ttl_val = now_sec + TTL_HOURS * 3600
 ### 1. DynamoDB 권한
 - dynamodb:PutItem
 - dynamodb:GetItem
-- dynamodb:UpdateItem (선택적)
+- dynamodb:DeleteItem (TTL 외 정리 시)
 리소스 예:
 ```css
 arn:aws:dynamodb:{region}:{account-id}:table/{CONNECTIONS_TABLE}
@@ -84,11 +91,10 @@ arn:aws:dynamodb:{region}:{account-id}:table/{CONNECTIONS_TABLE}
 ---
 ## 7. 한계 & TODO (Limitations / TODO)
 ### 한계
-- clientId 가 항상 "unknown"으로 저장되며 클라이언트 식별 기능이 제한됩니다.
-- IP, region 등의 추가 정보는 저장하지 않습니다.
-- TTL 만료 외에 연결 정리(cleanup) 기능이 없습니다.
+- TTL 외의 불필요한 연결(clean-up) 로직은 포함되어 있지 않습니다.
+- IP 주소, User-Agent 등 상세 접속 정보는 저장하지 않습니다.
+- clientId/account/region 값은 검증 없이 저장됩니다.
 ### TODO
-- clientId 파라미터 지원
-- sourceIp, region 등 메타데이터 저장 확장
-- 오래된 연결 중복 제거 및 클린업 기능 추가
-- WebSocket 연결 모니터링 지표 확장
+- 접속 IP, User-Agent 로그 저장 기능 확장
+- History 구독 스트림 재접속 판단을 위한 heartbeat 관리 기능 추가
+- 중복 연결 방지 또는 연결 수 제한 기능 추가
