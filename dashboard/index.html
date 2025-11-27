@@ -807,7 +807,7 @@
           try {
             const d = JSON.parse(e.data);
 
-            if (d.type === 'ping') {
+            if (d.type === 'ping' || d.type === 'ack') {
                 //console.log(`Event WS: Ping 받음 -> Pong 보냄`);
                 ws.send(JSON.stringify({ type: "pong" }));
                 return; 
@@ -853,7 +853,7 @@
           try {
             const d = JSON.parse(e.data);
 
-            if (d.type === 'ping') {
+            if (d.type === 'ping' || d.type === 'ack') {
                 //console.log(`Remed WS: Ping 받음 -> Pong 보냄`);
                 ws.send(JSON.stringify({ type: "pong" }));
                 return; 
@@ -895,7 +895,7 @@
                 return;
             }
 
-            if (d.type === 'ping') {
+            if (d.type === 'ping' || d.type === 'ack') {
                 //console.log(`History WS: Ping 받음 -> Pong 보냄`);
                 ws.send(JSON.stringify({ type: "pong" }));
                 return; 
