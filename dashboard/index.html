@@ -211,7 +211,7 @@
               <tr>
                 <th class="px-5 py-3 font-semibold border-b border-[#30363d] w-24 sortable whitespace-nowrap" data-table="events" data-key="time">시간</th>
                 <th class="px-5 py-3 font-semibold border-b border-[#30363d] w-32 sortable whitespace-nowrap" data-table="events" data-key="source">소스</th>
-                <th class="px-5 py-3 font-semibold border-b border-[#30363d] sortable whitespace-nowrap" data-table="events" data-key="type">이벤트 유형</th>
+                <th class="px-5 py-3 font-semibold border-b border-[#30363d] w-64 sortable whitespace-nowrap" data-table="events" data-key="type">이벤트 유형</th>
                 <th class="px-5 py-3 font-semibold border-b border-[#30363d] sortable whitespace-nowrap" data-table="events" data-key="arn">ARN</th>
                 <th class="px-5 py-3 font-semibold border-b border-[#30363d] w-24 sortable whitespace-nowrap" data-table="events" data-key="severity">심각도</th>
               </tr>
@@ -272,7 +272,7 @@
           <thead class="text-gray-400 text-xs uppercase">
             <tr>
               <th class="px-5 py-3 font-semibold border-b border-[#30363d] w-40 sortable whitespace-nowrap" data-table="incidents" data-key="incident_id">인시던트 ID</th>
-              <th class="px-5 py-3 font-semibold border-b border-[#30363d] sortable whitespace-nowrap" data-table="incidents" data-key="event_type">이벤트 유형</th>
+              <th class="px-5 py-3 font-semibold border-b border-[#30363d] w-80 sortable whitespace-nowrap" data-table="incidents" data-key="event_type">이벤트 유형</th>
               <th class="px-5 py-3 font-semibold border-b border-[#30363d] sortable whitespace-nowrap" data-table="incidents" data-key="resource">리소스</th>
               <th class="px-5 py-3 font-semibold border-b border-[#30363d] w-24 sortable whitespace-nowrap" data-table="incidents" data-key="severity">심각도</th>
               <th class="px-5 py-3 font-semibold border-b border-[#30363d] w-24 sortable whitespace-nowrap" data-table="incidents" data-key="status">상태</th>
@@ -457,11 +457,14 @@
     function renderTables() {
       const sortedEvents = getSortedData(state.events, state.sort.events);
       const evBody = document.getElementById('eventsBody');
+      
       evBody.innerHTML = sortedEvents.slice(0, 20).map(e => `
         <tr onclick="showDetail(state.events.find(x=>x.time==${e.time}), 'event')" class="transition-colors ${e.severity==='CRITICAL'?'animate-flash':''}">
           <td class="px-5 py-2.5 whitespace-nowrap text-gray-400 font-mono text-xs">${formatTime(e.time)}</td>
           <td class="px-5 py-2.5 text-gray-300">${e.source || '-'}</td>
-          <td class="px-5 py-2.5 text-gray-200 font-medium">${e.type}</td>
+          <td class="px-5 py-2.5 text-gray-200 font-medium">
+            <div class="line-clamp-2 whitespace-normal break-all w-full" title="${e.type}">${e.type}</div>
+          </td>
           <td class="px-5 py-2.5 text-gray-400 truncate max-w-[260px]">${e.arn || e.resource || '-'}</td>
           <td class="px-5 py-2.5"><span class="px-2 py-0.5 rounded text-[11px] font-bold ${getBadgeClass(e.severity)}">${e.severity}</span></td>
         </tr>
@@ -501,7 +504,9 @@
         return `
         <tr onclick="showDetail(state.incidents.find(x=>x.incident_id=='${i.incident_id}'), 'incident')">
           <td class="px-5 py-2.5 font-mono text-blue-400 text-xs">${i.incident_id}</td>
-          <td class="px-5 py-2.5 text-gray-200 font-medium">${i.event_type}</td>
+          <td class="px-5 py-2.5 text-gray-200 font-medium">
+            <div class="line-clamp-2 whitespace-normal break-all w-full" title="${i.event_type}">${i.event_type}</div>
+          </td>
           <td class="px-5 py-2.5 text-gray-400 truncate max-w-[200px]">${i.resource}</td>
           <td class="px-5 py-2.5"><span class="px-2 py-0.5 rounded text-[11px] font-bold ${getBadgeClass(i.severity)}">${i.severity}</span></td>
           
@@ -819,8 +824,6 @@
                 console.warn("JSON 파싱 실패:", e.data);
                 return;
             }
-
-            console.log("📥 WS Data:", d);
 
             if(d.incidents && Array.isArray(d.incidents)) {
               state.incidents = []; 
