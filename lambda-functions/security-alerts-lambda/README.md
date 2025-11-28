@@ -34,11 +34,11 @@
     ```
 ---
 ## 4. 환경 변수 (Environment Variables) 
-| Key             | 예시 값                                                                                                         | 설명                                 |
-| --------------- | ------------------------------------------------------------------------------------------------------------ | ---------------------------------- |
-| **AWS_REGION**  | us-east-1                                                                                                    | Lambda 실행 리전 (기본값 us-east-1)       |
-| **WS_ENDPOINT** | [https://xxx.execute-api.us-east-1.amazonaws.com/prod](https://xxx.execute-api.us-east-1.amazonaws.com/prod) | WebSocket API Gateway Endpoint     |
-| **TABLE_NAME**  | WebSocketConnections                                                                                         | WebSocket 연결 목록 저장 DynamoDB 테이블 이름 |
+| Key             | 예시 값                                                        | 설명                                 |
+| --------------- |-------------------------------------------------------------| ---------------------------------- |
+| **AWS_REGION**  | us-east-1                                                   | Lambda 실행 리전 (기본값 us-east-1)       |
+| **WS_ENDPOINT** | http://egtwu3mkhb.execute-api.us-east-1.amazonaws.com/prod/ | WebSocket API Gateway Endpoint     |
+| **TABLE_NAME**  | WebSocketConnections_v2                                     | WebSocket 연결 목록 저장 DynamoDB 테이블 이름 |
 
 ---
 ## 5. 사용 리소스 및 의존성 (Resources & Dependencies) 

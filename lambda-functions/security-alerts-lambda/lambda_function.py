@@ -1,7 +1,8 @@
 import json, os, boto3, time
 
 # === 환경 변수 ===
-REGION = os.environ.get("AWS_REGION", "us-east-1")
+REGION = os.environ.get("REGION") or os.environ.get("AWS_REGION", "us-east-1")
+ec2 = boto3.client("ec2", region_name=REGION)
 WS_ENDPOINT = os.environ.get("WS_ENDPOINT")
 CONNECTIONS_TABLE = os.environ.get("TABLE_NAME")
 

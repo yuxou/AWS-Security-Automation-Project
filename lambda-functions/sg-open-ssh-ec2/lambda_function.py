@@ -24,7 +24,7 @@ HTTP_TIMEOUT       = 8
 # 🔹 Incident 테이블
 INCIDENT_TABLE     = os.environ.get("INCIDENT_TABLE", "Incident")
 
-# 상관관계 윈도(초)
+# 상관관계 윈도(초) – 현재 SG 마커 방식은 사용 안 하지만 남겨둠
 CORRELATION_TTL_SECONDS = int(os.environ.get("CORRELATION_TTL_SECONDS", "600"))
 
 # 이벤트 시간 사용 방식: "0"이면 현재시간 사용
@@ -36,6 +36,7 @@ COMPAT_TEXT = os.environ.get("COMPAT_TEXT", "0") == "1"
 
 ddb_client = boto3.client("dynamodb")
 sts_client = boto3.client("sts")
+ec2_client = boto3.client("ec2")  # 🔹 SG 규칙 확인용
 
 def ddb_resource():
     region = os.environ.get("AWS_REGION") or "us-east-1"
@@ -208,9 +209,7 @@ def to_dashboard_event(event, payload) -> dict:
             "region": region,
             "severity": sev,
             "meta": meta,
-
-            # 일부 대시보드가 top-level 'arn'을 바로 쓰는 경우 대비
-            "arn": meta["arn"]
+            "arn": meta["arn"]   # 일부 대시보드가 top-level 'arn'을 바로 쓰는 경우 대비
         },
     }
 
@@ -259,17 +258,18 @@ def post_to_ws_dashboard(formatted_event: dict):
 
     api = boto3.client("apigatewaymanagementapi", endpoint_url=endpoint_url, region_name=region)
 
-    # v2 원본(JSON 래핑)
-    v2_bytes = json.dumps(_json_safe(formatted_event)).encode("utf-8")
-
-    # v1 평탄(JSON) – 대시보드가 낡은 스키마여도 수신되게
-    v1_obj   = _flatten_v1(formatted_event if formatted_event.get("kind")=="event"
-                           else {"kind":"event","event":formatted_event.get("event",formatted_event)})
+    # 🔹 v1 평탄 JSON만 대시보드로 보냄 (v2는 더 이상 전송 X)
+    v1_obj = _flatten_v1(
+        formatted_event if formatted_event.get("kind") == "event"
+        else {"kind": "event", "event": formatted_event.get("event", formatted_event)}
+    )
     v1_bytes = json.dumps(_json_safe(v1_obj)).encode("utf-8") if COMPAT_V1 else None
+
+    # 디버깅 로그
     print("DEBUG_V1_FOR_DASHBOARD:", json.dumps(v1_obj, ensure_ascii=False))
 
-    # 텍스트 요약(기본 꺼둠 – 대시보드 JSON.parse 에러 방지)
-    text_bytes = _text_summary(v1_obj).encode("utf-8") if COMPAT_TEXT else None
+    # 🔴 텍스트 요약은 보내지 않음 (undefined 라인 원인 제거)
+    text_bytes = None
 
     table = ddb_resource().Table(CONNECTIONS_TABLE)
     ok = gone = err = 0
@@ -290,11 +290,10 @@ def post_to_ws_dashboard(formatted_event: dict):
             if not cid:
                 continue
             try:
-                api.post_to_connection(ConnectionId=cid, Data=v2_bytes)
+                # ✅ v1 JSON만 전송 → 대시보드에는 한 줄만 찍힘
                 if v1_bytes:
                     api.post_to_connection(ConnectionId=cid, Data=v1_bytes)
-                if text_bytes:
-                    api.post_to_connection(ConnectionId=cid, Data=text_bytes)
+                # text_bytes는 전송하지 않음
                 ok += 1
             except api.exceptions.GoneException:
                 gone += 1
@@ -319,7 +318,8 @@ def post_to_ws_dashboard(formatted_event: dict):
 
     print(f"WS broadcast done: ok={ok}, gone={gone}, err={err}")
 
-# ---------- STATE: SG 오픈 마커 ----------
+
+# ---------- STATE: SG 오픈 마커 (현재는 사용 안 함, 남겨만 둠) ----------
 def state_table():
     return ddb_resource().Table(STATE_TABLE)
 
@@ -341,6 +341,7 @@ def put_sg_open_marker(sg_id: str, actor_arn: str, src_ip: str, when_iso: str):
     print(f"[STATE] put marker for {sg_id} ttl={ttl}")
 
 def get_open_markers_for_sg_ids(sg_ids):
+    # 현재는 사용하지 않지만 함수는 남겨둠
     if not sg_ids:
         return {}
     t = state_table()
@@ -389,30 +390,74 @@ def extract_sg_ids_from_event(detail: dict):
 
     return list(sg_ids)
 
+# ---------- SG 규칙 확인: SSH 월드 오픈 여부 ----------
+def is_world_open_ssh_sg(sg_id: str) -> bool:
+    """
+    SG에 22/tcp (또는 전체 포트) + 0.0.0.0/0 또는 ::/0 가 있으면 True
+    """
+    try:
+        resp = ec2_client.describe_security_groups(GroupIds=[sg_id])
+    except ClientError as e:
+        print(f"describe_security_groups failed for {sg_id}: {e}")
+        return False
+
+    for sg in resp.get("SecurityGroups", []):
+        for perm in sg.get("IpPermissions", []):
+            ip_proto = perm.get("IpProtocol")
+            from_port = perm.get("FromPort")
+            to_port   = perm.get("ToPort")
+
+            # 프로토콜 체크
+            if ip_proto not in ("tcp", "-1"):
+                continue
+
+            # 포트 체크 (전체 포트 허용도 포함)
+            if from_port is None or to_port is None:
+                port_ok = True  # all ports
+            else:
+                try:
+                    port_ok = int(from_port) <= 22 <= int(to_port)
+                except Exception:
+                    port_ok = False
+            if not port_ok:
+                continue
+
+            # CIDR 체크
+            cidrs = []
+            for r in perm.get("IpRanges", []):
+                c = r.get("CidrIp")
+                if c: cidrs.append(c)
+            for r in perm.get("Ipv6Ranges", []):
+                c = r.get("CidrIpv6")
+                if c: cidrs.append(c)
+
+            for c in cidrs:
+                if c in ("0.0.0.0/0", "::/0"):
+                    print(f"[SG] {sg_id} is world-open SSH (port 22, cidr={c})")
+                    return True
+
+    return False
+
+def filter_world_open_sg_ids(sg_ids):
+    """입력 SG 목록 중 SSH 월드 오픈인 것만 골라낸다."""
+    world = []
+    for sg_id in sg_ids:
+        if is_world_open_ssh_sg(sg_id):
+            world.append(sg_id)
+    return world
+
 # ---------- 핸들러들 ----------
-def handle_sg_ssh_open(event):
-    detail = event.get("detail", {}) or {}
-    en = detail.get("eventName")
-
-    # 콘솔/신규 API 포함
-    if en not in ("AuthorizeSecurityGroupIngress", "ModifySecurityGroupRules"):
-        return _ret({"status": "skip_non_target_event"})
-
-    # SG ID 추출 (두 이벤트 모두 여기로 들어오게)
-    sg_id = safe_get(detail, "requestParameters", "groupId") \
-         or safe_get(detail, "responseElements", "groupId") \
-         or "unknown"
-
-    ui = detail.get("userIdentity", {}) or {}
-    actor_arn = ui.get("arn") or ui.get("principalId") or "unknown"
-    src_ip = detail.get("sourceIPAddress")
-    when_iso = event.get("time") or detail.get("eventTime")
-
-    put_sg_open_marker(sg_id, actor_arn, src_ip, when_iso)
-    return _ret({"status": "marked_sg_open", "sg": sg_id, "by": en})
-
 
 def handle_instance_with_open_sg(event):
+    """
+    ✅ 변경된 핵심 로직:
+    - RunInstances 또는 ModifyInstanceAttribute 이벤트에서
+      인스턴스에 연결된 SG 목록을 추출
+    - 각 SG 실제 설정을 describe_security_groups 로 조회
+    - SSH(22/tcp) + 0.0.0.0/0 또는 ::/0 인 SG가 하나라도 있으면 알림 발생
+    - SG 인바운드 규칙을 여는 시점(AuthorizeSecurityGroupIngress 등)에는
+      이 함수가 호출되지 않으므로 알림 없음
+    """
     detail = event.get("detail", {}) or {}
     en = detail.get("eventName")
     if en not in ("RunInstances", "ModifyInstanceAttribute"):
@@ -422,27 +467,30 @@ def handle_instance_with_open_sg(event):
     if not sg_ids:
         return _ret({"status": "no_sg_in_event"})
 
-    markers = get_open_markers_for_sg_ids(sg_ids)
-
-    if not markers:
-        return _ret({"status": "no_open_sg_match", "sgs": sg_ids})
-
-    # 마커에서 행위자 ARN 하나 추출
-    actor_arn = ""
-    for m in markers.values():
-        actor_arn = m.get("actor") or ""
-        if actor_arn:
-            break
+    # 🔹 실제 SG 설정을 보고 SSH 월드 오픈인 SG만 필터링
+    world_sg_ids = filter_world_open_sg_ids(sg_ids)
+    if not world_sg_ids:
+        return _ret({"status": "no_world_open_sg", "sgs": sg_ids})
 
     account  = extract_account_id(event, {})
     region   = extract_region(event)
+
+    # 인스턴스 ID 추출 (RunInstances / ModifyInstanceAttribute 양쪽 커버)
     instance_ids = []
     for it in (safe_get(detail, "responseElements", "instancesSet", "items", default=[]) or []):
         iid = it.get("instanceId")
-        if iid: instance_ids.append(iid)
+        if iid:
+            instance_ids.append(iid)
+    if not instance_ids:
+        iid = safe_get(detail, "requestParameters", "instanceId")
+        if iid:
+            instance_ids.append(iid)
+
+    ui = detail.get("userIdentity", {}) or {}
+    actor_arn = ui.get("arn") or ui.get("principalId") or "unknown"
 
     when_iso = event.get("time") or detail.get("eventTime") or now_iso()
-    resource_val = ",".join(instance_ids) if instance_ids else ",".join(sg_ids)
+    resource_val = ",".join(instance_ids) if instance_ids else ",".join(world_sg_ids)
 
     payload = {
         "alert_type": "ec2_deployed_open_ssh",
@@ -452,11 +500,10 @@ def handle_instance_with_open_sg(event):
         "resource": resource_val,
         "account": account,
         "region": region,
-        "sg_ids": sg_ids,
-        "sg_id": sg_ids[0] if sg_ids else "",
+        "sg_ids": world_sg_ids,
+        "sg_id": world_sg_ids[0] if world_sg_ids else "",
         "principal": actor_arn,
         "arn": actor_arn,
-        "matched_markers": _json_safe(markers),
         "api_event": en,
         "time": when_iso,
         "raw_event": detail
@@ -467,7 +514,7 @@ def handle_instance_with_open_sg(event):
         "time": when_iso,
         "source": "EC2",
         "type": "인스턴스가 공개 SG에 연결된 상태로 배포됨",
-        "sg": sg_ids[0] if sg_ids else "",
+        "sg": world_sg_ids[0] if world_sg_ids else "",
         "arn": actor_arn,
         "resource": resource_val,
         "account": account,
@@ -490,8 +537,7 @@ def handle_instance_with_open_sg(event):
 
     dashboard_event = to_dashboard_event(event, payload)
     post_to_ws_dashboard(dashboard_event)
-    return _ret({"status": "alert_sent", "instance_ids": instance_ids, "sgs": sg_ids})
-
+    return _ret({"status": "alert_sent", "instance_ids": instance_ids, "sgs": world_sg_ids})
 
 def handle_access_key_created(event):
     if event.get("source") != "aws.iam":
@@ -569,9 +615,9 @@ def lambda_handler(event, context):
         detail = event.get("detail", {}) or {}
         en  = detail.get("eventName")
 
-        if src == "aws.ec2" and dt == "AWS API Call via CloudTrail" and en in ("AuthorizeSecurityGroupIngress", "ModifySecurityGroupRules"):
-            return handle_sg_ssh_open(event)
-
+        # ✅ 이제 SG 인바운드 변경 이벤트(AuthorizeSecurityGroupIngress 등)는
+        #    별도 처리 없이 모두 무시되고,
+        #    "RunInstances / ModifyInstanceAttribute" 에서만 감지함
         if src == "aws.ec2" and dt == "AWS API Call via CloudTrail" and en in ("RunInstances", "ModifyInstanceAttribute"):
             return handle_instance_with_open_sg(event)
 
