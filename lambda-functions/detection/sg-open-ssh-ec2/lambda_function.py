@@ -26,13 +26,13 @@ SNS_TOPIC_ARN_AUTOREM = os.environ.get("SNS_TOPIC_ARN_AUTOREM")
 # 🔹 Incident 테이블
 INCIDENT_TABLE     = os.environ.get("INCIDENT_TABLE", "Incident")
 
-# 상관관계 윈도(초) – 현재 SG 마커 방식은 사용 안 하지만 남겨둠
+# 상관관계 윈도(초)
 CORRELATION_TTL_SECONDS = int(os.environ.get("CORRELATION_TTL_SECONDS", "600"))
 
 # 이벤트 시간 사용 방식: "0"이면 현재시간 사용
 USE_EVENT_TIME = os.environ.get("USE_EVENT_TIME", "1")
 
-# 호환 포맷 전송 옵션 (대시보드 JSON 파싱 에러 방지 위해 TEXT 기본 끔)
+# 호환 포맷 전송 옵션
 COMPAT_V1   = os.environ.get("COMPAT_V1", "1") == "1"
 COMPAT_TEXT = os.environ.get("COMPAT_TEXT", "0") == "1"
 
@@ -74,6 +74,7 @@ def safe_get(d, *keys, default=None):
 _ARN_ACCT_RE = re.compile(r"arn:aws:(?:iam|sts)::(\d{12}):")
 
 def extract_account_id(event: dict, payload: dict) -> str:
+    # 👉 요구사항: Incident 에서는 021417007719 로 고정
     if ACCOUNT_ID_OVERRIDE:
         return ACCOUNT_ID_OVERRIDE
     acct = event.get("account")
@@ -129,7 +130,10 @@ def put_incident_record(event_type: str,
                         severity: str,
                         status: str = "NEW",
                         created_at: str | None = None,
-                        details: dict | None = None):
+                        details: dict | None = None,
+                        account: str | None = None,
+                        region: str | None = None,
+                        source: str | None = None):
     """
     Incident 테이블에 1건 저장.
     details 필드에 대시보드와 유사한 JSON 구조 저장.
@@ -145,6 +149,8 @@ def put_incident_record(event_type: str,
     sev = (severity or "LOW").upper()
     st = (status or "NEW").upper()
 
+    acct_val = ACCOUNT_ID_OVERRIDE or account
+
     item = {
         "incident_id": iid,
         "event_type": event_type,
@@ -154,6 +160,12 @@ def put_incident_record(event_type: str,
         "created_at": created,
         "updated_at": created,
     }
+    if acct_val:
+        item["account"] = acct_val
+    if region:
+        item["region"] = region
+    if source:
+        item["source"] = source
     if details:
         item["details"] = details
 
@@ -211,34 +223,51 @@ def to_dashboard_event(event, payload) -> dict:
             "region": region,
             "severity": sev,
             "meta": meta,
-            "arn": meta["arn"]   # 일부 대시보드가 top-level 'arn'을 바로 쓰는 경우 대비
+            "arn": meta["arn"],   # 일부 대시보드가 top-level 'arn'을 바로 쓰는 경우 대비
+            "incident_id": meta.get("incident_id"),  # 🔹 incident_id도 같이 넣어 둠
         },
     }
 
 # ---------- WebSocket 브로드캐스트 ----------
 def _flatten_v1(v2_event: dict) -> dict:
     e = v2_event.get("event", v2_event)
+
+    # time 정규화
     t = e.get("time")
     if not isinstance(t, (int, float)):
         try:
-            t = int(datetime.fromisoformat(str(t).replace('Z','+00:00')).timestamp()*1000)
+            t = int(datetime.fromisoformat(str(t).replace('Z', '+00:00')).timestamp() * 1000)
         except Exception:
-            t = int(time.time()*1000)
+            t = int(time.time() * 1000)
+
     meta = e.get("meta") or {}
+
     sg_list = meta.get("sg_ids") or ([meta.get("sg_id")] if meta.get("sg_id") else [])
     sg_value = ",".join([s for s in sg_list if s])
-    arn_value = e.get("arn") or meta.get("arn") or meta.get("principal") or meta.get("actor") or ""
+
+    arn_value = (
+        e.get("arn")
+        or meta.get("arn")
+        or meta.get("principal")
+        or meta.get("actor")
+        or ""
+    )
+
+    # 🔹 incident_id 도 평탄화해서 top-level 로 올려줌
+    incident_id = e.get("incident_id") or meta.get("incident_id")
+
     return {
         "time": int(t),
-        "source":  normalize_source(e.get("source") or "AWS EC2"),
-        "type":    e.get("type") or e.get("event_type") or "Unknown",
-        "resource":e.get("resource") or e.get("principal") or "-",
+        "source": normalize_source(e.get("source") or "AWS EC2"),
+        "type": e.get("type") or e.get("event_type") or "Unknown",
+        "resource": e.get("resource") or e.get("principal") or "-",
         "account": e.get("account") or (meta.get("account_id") or ""),
-        "region":  e.get("region") or "",
-        "severity":(e.get("severity") or "INFO").upper(),
-        "sg": sg_value,     # SG 표시
-        "arn": arn_value,   # 행위자 ARN 표시
-        "meta": meta
+        "region": e.get("region") or "",
+        "severity": (e.get("severity") or "INFO").upper(),
+        "sg": sg_value,
+        "arn": arn_value,
+        "meta": meta,
+        "incident_id": incident_id,   # <<<<<<<<<<<<<< 중요한 부분
     }
 
 def _text_summary(v1: dict) -> str:
@@ -260,14 +289,13 @@ def post_to_ws_dashboard(formatted_event: dict):
 
     api = boto3.client("apigatewaymanagementapi", endpoint_url=endpoint_url, region_name=region)
 
-    # 🔹 v1 평탄 JSON만 대시보드로 보냄 (v2는 더 이상 전송 X)
+    # 🔹 v1 평탄 JSON만 대시보드로 보냄
     v1_obj = _flatten_v1(
         formatted_event if formatted_event.get("kind") == "event"
         else {"kind": "event", "event": formatted_event.get("event", formatted_event)}
     )
     v1_bytes = json.dumps(_json_safe(v1_obj)).encode("utf-8") if COMPAT_V1 else None
 
-    # 디버깅 로그
     print("DEBUG_V1_FOR_DASHBOARD:", json.dumps(v1_obj, ensure_ascii=False))
 
     table = ddb_resource().Table(CONNECTIONS_TABLE)
@@ -289,7 +317,6 @@ def post_to_ws_dashboard(formatted_event: dict):
             if not cid:
                 continue
             try:
-                # ✅ v1 JSON만 전송 → 대시보드에는 한 줄만 찍힘
                 if v1_bytes:
                     api.post_to_connection(ConnectionId=cid, Data=v1_bytes)
                 ok += 1
@@ -338,7 +365,6 @@ def put_sg_open_marker(sg_id: str, actor_arn: str, src_ip: str, when_iso: str):
     print(f"[STATE] put marker for {sg_id} ttl={ttl}")
 
 def get_open_markers_for_sg_ids(sg_ids):
-    # 현재는 사용하지 않지만 함수는 남겨둠
     if not sg_ids:
         return {}
     t = state_table()
@@ -363,24 +389,20 @@ def get_open_markers_for_sg_ids(sg_ids):
 def extract_sg_ids_from_event(detail: dict):
     sg_ids = set()
 
-    # RunInstances: requestParameters.networkInterfaceSet.items[].groupSet.items[].groupId
     for ni in (safe_get(detail, "requestParameters", "networkInterfaceSet", "items", default=[]) or []):
         for g in (safe_get(ni, "groupSet", "items", default=[]) or []):
             gid = g.get("groupId")
             if gid: sg_ids.add(gid)
 
-    # RunInstances: requestParameters.securityGroupId (고전)
     gid = safe_get(detail, "requestParameters", "securityGroupId")
     if gid: sg_ids.add(gid)
 
-    # responseElements: instancesSet[].networkInterfaceSet[].groupSet[].groupId
     for it in (safe_get(detail, "responseElements", "instancesSet", "items", default=[]) or []):
         for ni in (safe_get(it, "networkInterfaceSet", "items", default=[]) or []):
             for g in (safe_get(ni, "groupSet", "items", default=[]) or []):
                 gid = g.get("groupId")
                 if gid: sg_ids.add(gid)
 
-    # ModifyInstanceAttribute: requestParameters.groupSet.items[].groupId
     for g in (safe_get(detail, "requestParameters", "groupSet", "items", default=[]) or []):
         gid = g.get("groupId")
         if gid: sg_ids.add(gid)
@@ -389,9 +411,6 @@ def extract_sg_ids_from_event(detail: dict):
 
 # ---------- SG 규칙 확인: SSH 월드 오픈 여부 ----------
 def is_world_open_ssh_sg(sg_id: str) -> bool:
-    """
-    SG에 22/tcp (또는 전체 포트) + 0.0.0.0/0 또는 ::/0 가 있으면 True
-    """
     try:
         resp = ec2_client.describe_security_groups(GroupIds=[sg_id])
     except ClientError as e:
@@ -404,11 +423,9 @@ def is_world_open_ssh_sg(sg_id: str) -> bool:
             from_port = perm.get("FromPort")
             to_port   = perm.get("ToPort")
 
-            # 프로토콜 체크
             if ip_proto not in ("tcp", "-1"):
                 continue
 
-            # 포트 체크 (전체 포트 허용도 포함)
             if from_port is None or to_port is None:
                 port_ok = True  # all ports
             else:
@@ -419,7 +436,6 @@ def is_world_open_ssh_sg(sg_id: str) -> bool:
             if not port_ok:
                 continue
 
-            # CIDR 체크
             cidrs = []
             for r in perm.get("IpRanges", []):
                 c = r.get("CidrIp")
@@ -436,52 +452,28 @@ def is_world_open_ssh_sg(sg_id: str) -> bool:
     return False
 
 def filter_world_open_sg_ids(sg_ids):
-    """입력 SG 목록 중 SSH 월드 오픈인 것만 골라낸다."""
     world = []
     for sg_id in sg_ids:
         if is_world_open_ssh_sg(sg_id):
             world.append(sg_id)
     return world
 
-# ---------- SG 에 붙어있는 인스턴스 조회 (신규) ----------
-def get_instances_attached_to_sg(sg_id: str):
-    """
-    SG 가 이미 어떤 인스턴스에 attach 되어 있는지 ENI 기준으로 조회
-    """
-    instance_ids = set()
-    try:
-        resp = ec2_client.describe_network_interfaces(
-            Filters=[{"Name": "group-id", "Values": [sg_id]}]
-        )
-    except ClientError as e:
-        print(f"describe_network_interfaces failed for {sg_id}: {e}")
-        return []
-
-    for ni in resp.get("NetworkInterfaces", []):
-        att = ni.get("Attachment") or {}
-        iid = att.get("InstanceId")
-        if iid:
-            instance_ids.add(iid)
-
-    return list(instance_ids)
-
 # ---------- 핸들러들 ----------
 
 def handle_instance_with_open_sg(event):
     """
-    RunInstances / ModifyInstanceAttribute 에서
-    SSH open SG 가 붙은 인스턴스 배포/변경 감지
+    RunInstances 에서
+    SSH open SG 가 붙은 인스턴스 배포 감지
     """
     detail = event.get("detail", {}) or {}
     en = detail.get("eventName")
-    if en not in ("RunInstances", "ModifyInstanceAttribute"):
-        return _ret({"status": "skip_non_target_event"})
+    if en != "RunInstances":
+        return _ret({"status": "skip_non_runinstances"})
 
     sg_ids = extract_sg_ids_from_event(detail)
     if not sg_ids:
         return _ret({"status": "no_sg_in_event"})
 
-    # 🔹 실제 SG 설정을 보고 SSH 월드 오픈인 SG만 필터링
     world_sg_ids = filter_world_open_sg_ids(sg_ids)
     if not world_sg_ids:
         return _ret({"status": "no_world_open_sg", "sgs": sg_ids})
@@ -489,7 +481,6 @@ def handle_instance_with_open_sg(event):
     account  = extract_account_id(event, {})
     region   = extract_region(event)
 
-    # 인스턴스 ID 추출
     instance_ids = []
     for it in (safe_get(detail, "responseElements", "instancesSet", "items", default=[]) or []):
         iid = it.get("instanceId")
@@ -502,6 +493,8 @@ def handle_instance_with_open_sg(event):
 
     ui = detail.get("userIdentity", {}) or {}
     actor_arn = ui.get("arn") or ui.get("principalId") or "unknown"
+    src_ip = detail.get("sourceIPAddress")
+    user_agent = detail.get("userAgent")
 
     when_iso = event.get("time") or detail.get("eventTime") or now_iso()
     resource_val = ",".join(instance_ids) if instance_ids else ",".join(world_sg_ids)
@@ -520,10 +513,9 @@ def handle_instance_with_open_sg(event):
         "arn": actor_arn,
         "api_event": en,
         "time": when_iso,
-        "raw_event": detail
+        "raw_event": detail,
     }
 
-    # 🔹 Incident details 구성
     incident_details = {
         "time": when_iso,
         "source": "EC2",
@@ -536,6 +528,14 @@ def handle_instance_with_open_sg(event):
         "alertType": "ALERT",
         "rulesViolated": ["인스턴스가 공개 SG에 연결된 상태로 배포됨"],
         "severity": "CRITICAL",
+        "meta": {
+            "device": {
+                "summary": user_agent or "unknown",
+                "ua": user_agent or ""
+            },
+            "ip": src_ip or "",
+            "api": en or ""
+        }
     }
 
     incident = put_incident_record(
@@ -545,6 +545,9 @@ def handle_instance_with_open_sg(event):
         status="NEW",
         created_at=when_iso,
         details=incident_details,
+        account=account,
+        region=region,
+        source="EC2",
     )
     if incident:
         payload["incident_id"] = incident["incident_id"]
@@ -552,12 +555,12 @@ def handle_instance_with_open_sg(event):
     print("DEBUG_BEFORE_SNS_BLOCK",
           {"sns_arn": SNS_TOPIC_ARN_AUTOREM, "instance_ids": instance_ids})
 
-    # 🔹 여기부터 SNS 자동대응 트리거 추가
+    # SNS 자동대응 트리거
     if SNS_TOPIC_ARN_AUTOREM and instance_ids:
         auto_msg = {
             "time": when_iso,
             "action": "QuarantineInstance",
-            "target": instance_ids[0],  # 여러 개면 우선 첫 번째
+            "target": instance_ids[0],
             "playbook": "isolate-ec2",
             "status": "TRIGGERED",
             "account": account,
@@ -582,13 +585,9 @@ def handle_instance_with_open_sg(event):
     return _ret({"status": "alert_sent", "instance_ids": instance_ids, "sgs": world_sg_ids})
 
 def handle_instance_attach_open_sg(event):
-    """
-    기존 인스턴스에 SSH open SG가 새로 attach 되었을 때 감지하는 로직
-    - 규칙 변경(AuthorizeSecurityGroupIngress 등)은 무시
-    - 오직 ModifyInstanceAttribute 에서 SG가 '새로 추가'된 경우만 감지
-    """
     detail = event.get("detail", {}) or {}
-    if detail.get("eventName") != "ModifyInstanceAttribute":
+    en = detail.get("eventName")
+    if en not in ("ModifyInstanceAttribute", "ModifyNetworkInterfaceAttribute"):
         return _ret({"status": "skip_non_modify_event"})
 
     # 요청 SG 목록(변경 후 SG 전체 목록)
@@ -599,29 +598,51 @@ def handle_instance_attach_open_sg(event):
             new_sgs.add(gid)
 
     if not new_sgs:
-        return _ret({"status": "no_sg_in_event"})
+        return _ret({"status": "no_sg_in_event", "eventName": en})
 
     # 인스턴스 ID 추출
-    instance_id = safe_get(detail, "requestParameters", "instanceId")
+    instance_id = None
+    if en == "ModifyInstanceAttribute":
+        instance_id = safe_get(detail, "requestParameters", "instanceId")
+    else:  # 🔹 ModifyNetworkInterfaceAttribute 인 경우 ENI -> 인스턴스 역추적
+        eni_id = safe_get(detail, "requestParameters", "networkInterfaceId")
+        if not eni_id:
+            return _ret({"status": "no_eni_in_event"})
+        try:
+            resp = ec2_client.describe_network_interfaces(
+                NetworkInterfaceIds=[eni_id]
+            )
+            nis = resp.get("NetworkInterfaces") or []
+            if nis:
+                att = nis[0].get("Attachment") or {}
+                instance_id = att.get("InstanceId")
+        except ClientError as e:
+            print("describe_network_interfaces error:", e)
+            return _ret({"status": "describe_eni_failed", "error": str(e)})
+
     if not instance_id:
-        return _ret({"status": "no_instance_in_event"})
+        return _ret({"status": "no_instance_in_event", "eventName": en})
 
-    # 🔹 기존 SG 목록 조회 (변경 전 SG들)
-    try:
-        resp = ec2_client.describe_instances(InstanceIds=[instance_id])
-        old_sgs = set()
-        for res in resp["Reservations"]:
-            for inst in res["Instances"]:
-                for sg in inst.get("SecurityGroups", []):
-                    old_sgs.add(sg["GroupId"])
-    except Exception as e:
-        print("describe_instances error:", e)
-        return _ret({"status": "describe_failed"})
+    # 🔥 새로 추가된 SG 목록 계산
+    if en == "ModifyNetworkInterfaceAttribute":
+        # 콘솔에서 ENI SG를 '교체'한 케이스 → new_sgs 전체를 추가로 간주
+        added_sgs = list(new_sgs)
+    else:
+        # ModifyInstanceAttribute 에서는 기존 SG와 차집합
+        try:
+            resp = ec2_client.describe_instances(InstanceIds=[instance_id])
+            old_sgs = set()
+            for res in resp.get("Reservations", []):
+                for inst in res.get("Instances", []):
+                    for sg in inst.get("SecurityGroups", []):
+                        old_sgs.add(sg["GroupId"])
+        except Exception as e:
+            print("describe_instances error:", e)
+            return _ret({"status": "describe_failed", "error": str(e)})
+        added_sgs = list(new_sgs - old_sgs)
 
-    # 🔥 새로 추가된 SG 목록
-    added_sgs = list(new_sgs - old_sgs)
     if not added_sgs:
-        return _ret({"status": "no_new_sg_added"})
+        return _ret({"status": "no_new_sg_added", "eventName": en})
 
     # 🔥 새로 추가된 SG 중 SSH open SG 찾기
     world_open_added = []
@@ -632,12 +653,16 @@ def handle_instance_attach_open_sg(event):
     if not world_open_added:
         return _ret({"status": "added_sgs_not_world_open", "added_sgs": added_sgs})
 
-    # ===== 알림 생성 =====
+    # ===== 아래는 그대로 (Incident 생성 + 대시보드 전송) =====
     account = extract_account_id(event, {})
     region  = extract_region(event)
     ui = detail.get("userIdentity", {}) or {}
     actor_arn = ui.get("arn") or ui.get("principalId") or "unknown"
     when_iso = event.get("time") or detail.get("eventTime") or now_iso()
+
+    # 🔹 메타용
+    src_ip = detail.get("sourceIPAddress")
+    user_agent = detail.get("userAgent")
 
     payload = {
         "alert_type": "ec2_existing_instance_attach_open_sg",
@@ -651,7 +676,7 @@ def handle_instance_attach_open_sg(event):
         "sg_id": world_open_added[0],
         "principal": actor_arn,
         "arn": actor_arn,
-        "api_event": "ModifyInstanceAttribute",
+        "api_event": en,
         "time": when_iso,
         "raw_event": detail
     }
@@ -668,8 +693,15 @@ def handle_instance_attach_open_sg(event):
         "alertType": "ALERT",
         "rulesViolated": ["기존 인스턴스에 공개 SG가 새로 연결됨"],
         "severity": "CRITICAL",
+        "meta": {
+            "device": {
+                "summary": user_agent or "unknown",
+                "ua": user_agent or ""
+            },
+            "ip": src_ip or "",
+            "api": en or ""
+        }
     }
-
     incident = put_incident_record(
         event_type="기존 인스턴스에 공개 SG가 새로 연결됨",
         resource=instance_id,
@@ -677,15 +709,49 @@ def handle_instance_attach_open_sg(event):
         status="NEW",
         created_at=when_iso,
         details=incident_details,
+        account=account,
+        region=region,
+        source="EC2",
     )
 
     if incident:
         payload["incident_id"] = incident["incident_id"]
 
+    # 🔹 기존 인스턴스 + 공개 SG attach 도 자동 격리 트리거
+    if SNS_TOPIC_ARN_AUTOREM and instance_id:
+        auto_msg = {
+            "time": when_iso,
+            "action": "QuarantineInstance",
+            "target": instance_id,
+            "playbook": "isolate-ec2",
+            "status": "TRIGGERED",
+            "account": account,
+            "region": region,
+        }
+        if incident:
+            auto_msg["incident_id"] = incident["incident_id"]
+
+        try:
+            sns_client.publish(
+                TopicArn=SNS_TOPIC_ARN_AUTOREM,
+                Message=json.dumps(auto_msg),
+                Subject="EC2 existing instance with SSH open SG auto remediation"
+            )
+            print("✅ SNS auto-remediation message published (attach_open_sg):",
+                  json.dumps(auto_msg, ensure_ascii=False))
+        except Exception as e:
+            print("❌ SNS publish failed (attach_open_sg):", e)
+
     dashboard_event = to_dashboard_event(event, payload)
     post_to_ws_dashboard(dashboard_event)
 
-    return _ret({"status": "alert_sent_attach_open_sg", "instance": instance_id, "added_sgs": world_open_added})
+    return _ret({
+        "status": "alert_sent_attach_open_sg",
+        "instance": instance_id,
+        "added_sgs": world_open_added,
+        "eventName": en
+    })
+
 
 def handle_access_key_created(event):
     if event.get("source") != "aws.iam":
@@ -722,7 +788,6 @@ def handle_access_key_created(event):
     account = extract_account_id(event, payload)
     region  = extract_region(event)
 
-    # 🔹 Incident details – 요청한 형식 그대로
     incident_details = {
         "time": when_iso,
         "source": "IAM",
@@ -734,7 +799,15 @@ def handle_access_key_created(event):
         "region": region,
         "alertType": "ALERT",
         "rulesViolated": ["새 Access Key 생성"],
-        "severity": "HIGH"
+        "severity": "HIGH",
+        "meta": {
+            "device": {
+                "summary": user_agent or "unknown",
+                "ua": user_agent or ""
+            },
+            "ip": src_ip or "",
+            "api": "CreateAccessKey"
+        }
     }
 
     incident = put_incident_record(
@@ -744,6 +817,9 @@ def handle_access_key_created(event):
         status="NEW",
         created_at=when_iso,
         details=incident_details,
+        account=account,
+        region=region,
+        source="IAM",
     )
     if incident:
         payload["incident_id"] = incident["incident_id"]
@@ -764,19 +840,23 @@ def lambda_handler(event, context):
         detail = event.get("detail", {}) or {}
         en  = detail.get("eventName")
 
-        # 인스턴스 생성/SG 교체 시 공개 SG 연결
-        if src == "aws.ec2" and dt == "AWS API Call via CloudTrail" and en in ("RunInstances", "ModifyInstanceAttribute"):
+        # 새 인스턴스 + SSH Open SG
+        if src == "aws.ec2" and dt == "AWS API Call via CloudTrail" and en == "RunInstances":
             return handle_instance_with_open_sg(event)
 
+        # 기존 인스턴스에 SSH Open SG attach
+        if src == "aws.ec2" and dt == "AWS API Call via CloudTrail" and en in (
+            "ModifyInstanceAttribute",
+            "ModifyNetworkInterfaceAttribute",   # 🔹 추가
+        ):
+            return handle_instance_attach_open_sg(event)
+
+        # 새 Access Key 생성
         if src == "aws.iam" and dt == "AWS API Call via CloudTrail":
             return handle_access_key_created(event)
 
-        # 기존 인스턴스에 SSH open SG가 새로 attach된 경우
-        if src == "aws.ec2" and dt == "AWS API Call via CloudTrail" and en == "ModifyInstanceAttribute":
-            return handle_instance_attach_open_sg(event)
-
-
-        return _ret({"status": "noop"})
+        return _ret({"status": "noop", "en": en, "src": src, "dt": dt})
     except Exception as e:
         print("handler error:", e)
         raise
+
