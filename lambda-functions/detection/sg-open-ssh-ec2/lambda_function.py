@@ -20,25 +20,46 @@ CONNECTIONS_TABLE  = os.environ.get("CONNECTIONS_TABLE", "WebSocketConnections")
 ACCOUNT_ID_OVERRIDE= os.environ.get("ACCOUNT_ID_OVERRIDE")
 STATE_PK           = os.environ.get("STATE_PK", "id")
 HTTP_TIMEOUT       = 8
-sns_client = boto3.client("sns")
+
+sns_client         = boto3.client("sns")
 SNS_TOPIC_ARN_AUTOREM = os.environ.get("SNS_TOPIC_ARN_AUTOREM")
 
-# 🔹 Incident 테이블
 INCIDENT_TABLE     = os.environ.get("INCIDENT_TABLE", "Incident")
-
-# 상관관계 윈도(초)
 CORRELATION_TTL_SECONDS = int(os.environ.get("CORRELATION_TTL_SECONDS", "600"))
+USE_EVENT_TIME     = os.environ.get("USE_EVENT_TIME", "1")
+COMPAT_V1          = os.environ.get("COMPAT_V1", "1") == "1"
+COMPAT_TEXT        = os.environ.get("COMPAT_TEXT", "0") == "1"
 
-# 이벤트 시간 사용 방식: "0"이면 현재시간 사용
-USE_EVENT_TIME = os.environ.get("USE_EVENT_TIME", "1")
+ddb_client         = boto3.client("dynamodb")
+sts_client         = boto3.client("sts")
+ec2_client         = boto3.client("ec2")
 
-# 호환 포맷 전송 옵션
-COMPAT_V1   = os.environ.get("COMPAT_V1", "1") == "1"
-COMPAT_TEXT = os.environ.get("COMPAT_TEXT", "0") == "1"
+# 🔹 예외 인스턴스용 태그
+EXCLUDE_TAG_KEY   = os.environ.get("EXCLUDE_TAG_KEY", "RemediationExclusion")
+EXCLUDE_TAG_VALUE = os.environ.get("EXCLUDE_TAG_VALUE", "Ignore")
 
-ddb_client = boto3.client("dynamodb")
-sts_client = boto3.client("sts")
-ec2_client = boto3.client("ec2")  # 🔹 SG 규칙 / ENI 확인용
+
+def is_instance_excluded(instance_id: str) -> bool:
+    """
+    특정 태그(EXCLUDE_TAG_KEY=EXCLUDE_TAG_VALUE)가 붙은 인스턴스는
+    탐지/자동대응 대상에서 제외
+    """
+    try:
+        resp = ec2_client.describe_instances(InstanceIds=[instance_id])
+    except ClientError as e:
+        print(f"[EXCLUDE] describe_instances error for {instance_id}:", e)
+        return False
+
+    for r in resp.get("Reservations", []):
+        for inst in r.get("Instances", []):
+            if inst.get("InstanceId") != instance_id:
+                continue
+            for tag in inst.get("Tags", []) or []:
+                if tag.get("Key") == EXCLUDE_TAG_KEY and tag.get("Value") == EXCLUDE_TAG_VALUE:
+                    print(f"[EXCLUDE] instance {instance_id} is excluded by tag {EXCLUDE_TAG_KEY}={EXCLUDE_TAG_VALUE}")
+                    return True
+    return False
+
 
 def ddb_resource():
     region = os.environ.get("AWS_REGION") or "us-east-1"
@@ -78,12 +99,15 @@ def extract_account_id(event: dict, payload: dict) -> str:
     if ACCOUNT_ID_OVERRIDE:
         return ACCOUNT_ID_OVERRIDE
     acct = event.get("account")
-    if acct: return acct
+    if acct:
+        return acct
     acct = (event.get("detail") or {}).get("userIdentity", {}).get("accountId")
-    if acct: return acct
+    if acct:
+        return acct
     arn = payload.get("arn") or payload.get("principal") or ""
     m = _ARN_ACCT_RE.search(arn)
-    if m: return m.group(1)
+    if m:
+        return m.group(1)
     try:
         return sts_client.get_caller_identity().get("Account")
     except Exception:
@@ -267,7 +291,7 @@ def _flatten_v1(v2_event: dict) -> dict:
         "sg": sg_value,
         "arn": arn_value,
         "meta": meta,
-        "incident_id": incident_id,   # <<<<<<<<<<<<<< 중요한 부분
+        "incident_id": incident_id,
     }
 
 def _text_summary(v1: dict) -> str:
@@ -392,20 +416,24 @@ def extract_sg_ids_from_event(detail: dict):
     for ni in (safe_get(detail, "requestParameters", "networkInterfaceSet", "items", default=[]) or []):
         for g in (safe_get(ni, "groupSet", "items", default=[]) or []):
             gid = g.get("groupId")
-            if gid: sg_ids.add(gid)
+            if gid:
+                sg_ids.add(gid)
 
     gid = safe_get(detail, "requestParameters", "securityGroupId")
-    if gid: sg_ids.add(gid)
+    if gid:
+        sg_ids.add(gid)
 
     for it in (safe_get(detail, "responseElements", "instancesSet", "items", default=[]) or []):
         for ni in (safe_get(it, "networkInterfaceSet", "items", default=[]) or []):
             for g in (safe_get(ni, "groupSet", "items", default=[]) or []):
                 gid = g.get("groupId")
-                if gid: sg_ids.add(gid)
+                if gid:
+                    sg_ids.add(gid)
 
     for g in (safe_get(detail, "requestParameters", "groupSet", "items", default=[]) or []):
         gid = g.get("groupId")
-        if gid: sg_ids.add(gid)
+        if gid:
+            sg_ids.add(gid)
 
     return list(sg_ids)
 
@@ -439,10 +467,12 @@ def is_world_open_ssh_sg(sg_id: str) -> bool:
             cidrs = []
             for r in perm.get("IpRanges", []):
                 c = r.get("CidrIp")
-                if c: cidrs.append(c)
+                if c:
+                    cidrs.append(c)
             for r in perm.get("Ipv6Ranges", []):
                 c = r.get("CidrIpv6")
-                if c: cidrs.append(c)
+                if c:
+                    cidrs.append(c)
 
             for c in cidrs:
                 if c in ("0.0.0.0/0", "::/0"):
@@ -490,6 +520,16 @@ def handle_instance_with_open_sg(event):
         iid = safe_get(detail, "requestParameters", "instanceId")
         if iid:
             instance_ids.append(iid)
+
+    # 🔹 예외 인스턴스 필터링
+    if instance_ids:
+        filtered_instance_ids = [iid for iid in instance_ids if not is_instance_excluded(iid)]
+        if not filtered_instance_ids:
+            return _ret({
+                "status": "all_instances_excluded",
+                "instance_ids": instance_ids
+            })
+        instance_ids = filtered_instance_ids
 
     ui = detail.get("userIdentity", {}) or {}
     actor_arn = ui.get("arn") or ui.get("principalId") or "unknown"
@@ -622,6 +662,11 @@ def handle_instance_start_with_open_sg(event):
     alerted_instances = []
 
     for iid in instance_ids:
+        # 🔹 예외 인스턴스면 건너뜀
+        if is_instance_excluded(iid):
+            print(f"[EXCLUDE] skip StartInstances for {iid}")
+            continue
+
         # 2) 인스턴스에 붙은 SG 조회
         try:
             resp = ec2_client.describe_instances(InstanceIds=[iid])
@@ -779,6 +824,14 @@ def handle_instance_attach_open_sg(event):
 
     if not instance_id:
         return _ret({"status": "no_instance_in_event", "eventName": en})
+
+    # 🔹 예외 인스턴스면 바로 스킵
+    if is_instance_excluded(instance_id):
+        return _ret({
+            "status": "excluded_instance_attach_open_sg",
+            "instance": instance_id,
+            "eventName": en
+        })
 
     # 🔥 새로 추가된 SG 목록 계산
     if en == "ModifyNetworkInterfaceAttribute":
@@ -1020,4 +1073,3 @@ def lambda_handler(event, context):
     except Exception as e:
         print("handler error:", e)
         raise
-
