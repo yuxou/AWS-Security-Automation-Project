@@ -1,7 +1,7 @@
 # AWS Security Event Automated Response System 
 > **AWS 클라우드 환경을 위한 실시간 보안 관제 및 자동 대응 플랫폼** > **KT Cloud TECH UP 프로젝트 최종 결과물**
 
-![Architecture Overview](https://github.com/user-attachments/assets/e169759e-6f56-4646-9be1-cd176a076131)
+<img width="865" height="530" alt="architecture" src="https://github.com/user-attachments/assets/66a8eafb-da62-4ef8-8def-f3c1e0520911" />
 
 <br/>
 
