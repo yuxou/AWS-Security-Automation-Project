@@ -1,7 +1,7 @@
 # AWS Security Event Automated Response System 
 > **AWS 클라우드 환경을 위한 실시간 보안 관제 및 자동 대응 플랫폼** > **KT Cloud TECH UP 프로젝트 최종 결과물**
 
-<img width="865" height="530" alt="architecture" src="https://github.com/user-attachments/assets/66a8eafb-da62-4ef8-8def-f3c1e0520911" />
+![Architecture Overview](images/architecture.png)
 
 <br/>
 
@@ -116,7 +116,7 @@ CloudTrail 로그를 실시간으로 분석하여 위협을 탐지하고, WebSoc
 * **이력 관리**: DynamoDB와 연동하여 과거 침해 사고 이력 조회
 
 <div align="center">
-  <img src="https://github.com/user-attachments/assets/b99d2695-ace0-40f3-b09a-a6a0d48c43c6" width="100%" alt="Dashboard Demo">
+  <img src="images/dashboard_demo.png" width="100%" alt="Dashboard Demo">
   <p><em>실시간 보안 관제 대시보드 시연 화면</em></p>
 </div>
 <br/>
