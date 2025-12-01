@@ -30,7 +30,7 @@ CloudTrail 로그를 실시간으로 분석하여 위협을 탐지하고, WebSoc
 ## 3. 핵심 기능 (Key Features)
 
 ### 1) 실시간 위협 탐지 (Detection)
-**총 36개의 보안 위협 시나리오**를 기반으로 EventBridge 패턴을 설계하여 실시간으로 탐지합니다.
+**총 32개의 보안 위협 시나리오**를 기반으로 EventBridge 패턴을 설계하여 실시간으로 탐지합니다.
 
 #### **핵심 탐지 카테고리 (Highlights)**
 * **Identity & Access (IAM)**
